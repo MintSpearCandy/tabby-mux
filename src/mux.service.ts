@@ -16,6 +16,7 @@ import { MUX_COMMANDS } from './commands'
 import { I18n } from './i18n'
 import { defaultMuxSettings, MuxSession, MuxSettings, MuxWindow } from './types'
 import { MuxStatusbarService } from './statusbar.service'
+import { MuxSidebarService } from './sidebar.service'
 
 /**
  * Owns the tmux session/window hierarchy.
@@ -503,6 +504,12 @@ export class MuxService {
         // applyIsolationSetting runs via config.changed$.
     }
 
+    async toggleSidebar (): Promise<void> {
+        const sidebar = this.settings.sidebar
+        this.config.store[CONFIG_KEY].sidebar.enabled = !sidebar.enabled
+        await this.config.save()
+    }
+
     /** Central dispatcher shared by hotkeys and the palette. */
     async runCommand (id: string): Promise<void> {
         const spec = MUX_COMMANDS.find(c => c.id === id)
@@ -592,6 +599,7 @@ export class MuxService {
 
         this.applyIsolationSetting()
         this.injector.get(MuxStatusbarService).start()
+        this.injector.get(MuxSidebarService).start()
 
         this.changed$.next()
     }

@@ -23,7 +23,7 @@ module.exports = {
         ],
     },
     externals: [
-        'fs', 'path', 'electron', '@electron/remote', 'ngx-toastr',
+        'fs', 'path', 'os', 'electron', '@electron/remote', 'ngx-toastr',
         /^rxjs/, /^@angular/, /^@ng-bootstrap/, /^tabby-/,
         // WARNING: '@ngx-translate/core' must NEVER be listed here nor imported.
         // It only resolves on the app.asar node_modules chain (builtin plugins),

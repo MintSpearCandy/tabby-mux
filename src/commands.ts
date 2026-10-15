@@ -193,6 +193,11 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
         labelKey: 'mux.toggleIsolation',
         run: mux => mux.toggleIsolation(),
     },
+    {
+        id: 'mux.toggle-sidebar',
+        labelKey: 'mux.toggleSidebar',
+        run: mux => mux.toggleSidebar(),
+    },
 ]
 
 /** Suffix of `mux.<id>` in the `hotkeys.mux` config subtree. */

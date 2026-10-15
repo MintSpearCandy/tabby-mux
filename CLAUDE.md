@@ -6,12 +6,14 @@ tmux 架构复刻插件（Session-Window-Pane）。宿主源码参考：`D:\Home
 
 ```
 src/
-  index.ts            NgModule 入口（4 个 multi provider：Config/Hotkey/Command/ToolbarButton）
+  index.ts            NgModule 入口（5 个 multi provider：Config/Hotkey/Command/ToolbarButton/SettingsTab）
   configProvider.ts   defaults：mux.* 配置 + hotkeys.mux.* 子树（必须声明，否则用户绑定被 ConfigProxy 丢弃）
   commands.ts         MUX_COMMANDS 命令表（id/labelKey/needs*/run）——palette、热键描述、热键分发共用
   mux.service.ts      核心服务：session/window 注册表 + 所有操作（debug 句柄 window.tabbyMux）
-  statusbar.service.ts 底部状态栏（DOM 注入式，无宿主扩展点可用）
-  hotkeys.ts          HotkeyProvider（35 个 mux.* 热键描述）
+  statusbar.service.ts 底部状态栏（DOM 注入；会话条+pane 信息+CPU/MEM 资源采样，无窗口列表）
+  sidebar.service.ts  左侧会话栏（appRoot .window 首子元素 = 最外侧左栏；轮询等待挂载点）
+  settings/           SettingsTabProvider + 设置页组件（内联模板+Bootstrap 控件+ngModel 即存）
+  hotkeys.ts          HotkeyProvider（mux.* 热键描述）
   toolbar.ts          工具栏按钮 —— 同时是 MuxService 的保底实例化钩子
   i18n.ts             en/zh 双语（LocaleService；禁 @ngx-translate/core）
   types.ts            MuxSession/MuxWindow/MuxSettings
@@ -45,6 +47,12 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 4. **`addTabRaw` 在 `registerWindow` 之前发射 activeTabChange$**：窗口注册时若 `app.activeTab === tab` 必须手动同步 `currentWindowIndex`（否则索引永久 desync）——见 `registerWindow` 内注释。
 5. **原生 `splitTab()`（duplicate 式）在终端 session 未初始化完时返回 null**（recovery token 未就绪）：splitPane 已做同 profile 新建终端的回退（也更贴近 tmux `%` 语义）。
 6. 工程侧：typescript 必须 ^4.9.5（TS 5.x 与 tabby-terminal→@ng-bootstrap→compiler-cli peer 链 ERESOLVE）；peerDependencies 只声明 `@angular/core`；部署时 dist 必须**作为子目录**整体拷贝。
+
+## UI 注入与设置页（2026-10-16 二轮实测）
+
+- **左侧会话栏**：`appRoot .window`（flex 容器）的**第一个子元素** = profile-tree 之左 = 最外侧左栏。挂载点在 appRoot 视图初始化后才存在 → 服务轮询（200ms×300）。内容区宽度被挤压 → xterm ResizeObserver 自动 refit。
+- **状态栏资源采样**：`os.cpus()` 两次采样差值算 CPU、`freemem/totalmem` 算内存；采样器跑在 `NgZone.runOutsideAngular`（纯 DOM 渲染不需要惊醒变更检测），config.changed$ 时重建采样器（间隔/开关热生效）。
+- **设置页**：`SettingsTabProvider`（tabby-settings，devDep）+ 内联模板组件（FormsModule + Bootstrap 类）。**npm typings 的基类 `title` 是属性**——子类用 getter 覆盖会 TS2611（BetterConfiger 走手写 declarations.d.ts 声明 accessor 的路线；本项目标题 locale 无关，直接字段）。配置控件 `[(ngModel)]` 直绑 `config.store.mux.*` 代理嵌套属性 + `(ngModelChange)="config.save()"`（嵌套属性赋值是 ConfigProxy 安全路径）。CDP 开设置页：`require('tabby-settings')` 可在 renderer 解析 → `app.openNewTabRaw({type: SettingsTabComponent, inputs:{activeTab:'mux'}})`。
 
 ## 常用命令
 

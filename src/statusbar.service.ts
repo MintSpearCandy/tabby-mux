@@ -1,8 +1,8 @@
-import { Injectable, Injector } from '@angular/core'
+import { Injectable, Injector, NgZone } from '@angular/core'
+import { cpus, freemem, totalmem } from 'os'
 import { AppService, ConfigService } from 'tabby-core'
 import { MuxService } from './mux.service'
 import { I18n } from './i18n'
-import { MuxSession } from './types'
 
 const STYLE_ID = 'tabby-mux-statusbar-style'
 const BAR_ID = 'tabby-mux-statusbar'
@@ -46,45 +46,30 @@ const STYLE = `
     color: var(--theme-primary-fg, #fff);
 }
 #tabby-mux-statusbar .mux-session-chip.detached { color: var(--theme-fg-more, #999); }
-#tabby-mux-statusbar .mux-sep {
-    margin: 0 6px 0 4px;
-    color: var(--theme-fg-more-2, #666);
-}
-#tabby-mux-statusbar .mux-window {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 8px;
-    border-radius: 3px;
-    cursor: pointer;
-}
-#tabby-mux-statusbar .mux-window:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
-#tabby-mux-statusbar .mux-window.active {
-    background: var(--theme-primary, #0d6efd);
-    color: var(--theme-primary-fg, #fff);
-}
-#tabby-mux-statusbar .mux-window.last:not(.active) { color: var(--theme-fg-more, #999); }
 #tabby-mux-statusbar .mux-spacer { flex: 1; }
 #tabby-mux-statusbar .mux-info {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     color: var(--theme-fg-more, #999);
     padding: 3px 2px;
 }
 #tabby-mux-statusbar .mux-info .mux-zoomed { color: var(--theme-warning, #f0ad4e); }
+#tabby-mux-statusbar .mux-info .mux-stat { display: inline-flex; align-items: center; gap: 4px; }
+#tabby-mux-statusbar .mux-info .mux-stat i { font-size: 11px; }
+#tabby-mux-statusbar .mux-info .mux-stat.warn { color: var(--theme-warning, #f0ad4e); }
 /* Make room for the bar by shrinking the app root (xterm refits via its
    ResizeObserver); the bar itself overlays the freed strip. */
 body.mux-statusbar-visible app-root { padding-bottom: var(--mux-statusbar-h, 26px); }
 `
 
 /**
- * tmux-style bottom status bar:
- *   [s0*] [s1] [s2] | 0:win 1:win* 2:win- ... pane i/n
+ * tmux-style bottom status bar - the session dashboard:
+ *   [s0*] [s1] | pane i/n | CPU 12% MEM 45%
  *
- * Session chips switch attachment (tmux attach semantics); the window list
- * always shows the bar session's windows. Tabby has no status bar extension
- * point, so the bar is injected as a fixed overlay on document.body
- * (TerminalWorkwench's host-injection pattern).
+ * The window list intentionally lives in the tab bar, not here. Tabby has no
+ * status bar extension point, so the bar is injected as a fixed overlay on
+ * document.body (TerminalWorkwench's host-injection pattern).
  */
 @Injectable({ providedIn: 'root' })
 export class MuxStatusbarService {
@@ -92,16 +77,23 @@ export class MuxStatusbarService {
     private readonly app: AppService
     private readonly config: ConfigService
     private readonly i18n: I18n
+    private readonly zone: NgZone
 
     private bar: HTMLElement | null = null
     private started = false
     private renderTimer: any = null
+
+    private samplerTimer: any = null
+    private lastCpuSample: ReturnType<typeof cpus> | null = null
+    private cpuUsage = 0
+    private memUsage = 0
 
     constructor (injector: Injector) {
         this.mux = injector.get(MuxService)
         this.app = injector.get(AppService)
         this.config = injector.get(ConfigService)
         this.i18n = injector.get(I18n)
+        this.zone = injector.get(NgZone)
     }
 
     start (): void {
@@ -122,10 +114,69 @@ export class MuxStatusbarService {
 
         this.mux.changed$.subscribe(() => this.scheduleRender())
         this.app.activeTabChange$.subscribe(() => this.scheduleRender())
-        this.config.changed$.subscribe(() => this.scheduleRender())
+        this.config.changed$.subscribe(() => {
+            this.applySamplerSetting()
+            this.scheduleRender()
+        })
         this.i18n.localeChanged$.subscribe(() => this.scheduleRender())
 
+        this.applySamplerSetting()
         this.scheduleRender()
+    }
+
+    /**
+     * (Re)starts the system resource sampler. Runs outside the Angular zone:
+     * rendering is plain DOM, so the ticks must not wake change detection.
+     */
+    private applySamplerSetting (): void {
+        const wanted = this.mux.settings.statusBar
+        const needsSampler = wanted.enabled && (wanted.showCpu || wanted.showMem)
+        const interval = Math.max(500, wanted.resourceIntervalMs)
+
+        if (this.samplerTimer !== null) {
+            clearInterval(this.samplerTimer)
+            this.samplerTimer = null
+            this.lastCpuSample = null
+        }
+        if (!needsSampler) {
+            return
+        }
+        this.zone.runOutsideAngular(() => {
+            this.samplerTimer = setInterval(() => this.sampleResources(), interval)
+        })
+    }
+
+    private sampleResources (): void {
+        const wanted = this.mux.settings.statusBar
+        let changed = false
+        if (wanted.showCpu) {
+            const now = cpus()
+            if (this.lastCpuSample) {
+                let idle = 0
+                let total = 0
+                for (let i = 0; i < now.length && i < this.lastCpuSample.length; i++) {
+                    const t = now[i].times
+                    const l = this.lastCpuSample[i].times
+                    const busy = (t.user - l.user) + (t.nice - l.nice) +
+                        (t.sys - l.sys) + (t.irq - l.irq)
+                    idle += t.idle - l.idle
+                    total += busy + (t.idle - l.idle)
+                }
+                if (total > 0) {
+                    this.cpuUsage = Math.max(0, Math.min(100, Math.round(100 * (1 - idle / total))))
+                    changed = true
+                }
+            }
+            this.lastCpuSample = now
+        }
+        if (wanted.showMem) {
+            const used = 1 - freemem() / totalmem()
+            this.memUsage = Math.max(0, Math.min(100, Math.round(used * 100)))
+            changed = true
+        }
+        if (changed) {
+            this.scheduleRender()
+        }
     }
 
     private scheduleRender (): void {
@@ -160,7 +211,7 @@ export class MuxStatusbarService {
         this.bar.innerHTML = this.buildHtml(session!)
     }
 
-    private buildHtml (session: MuxSession): string {
+    private buildHtml (session: any): string {
         const parts: string[] = []
 
         // ---- session chips (attach switcher) ----
@@ -177,25 +228,8 @@ export class MuxStatusbarService {
                 `title="${escapeHtml(this.i18n.t('mux.statusbar.session', { name: s.name }))}">` +
                 `<i class="fas fa-layer-group"></i>${label}</span>`)
         }
-        parts.push('<span class="mux-sep">|</span>')
 
-        // ---- window list of the bar session ----
-        session.windows.forEach((win, index) => {
-            const isCurrent = index === session.currentWindowIndex
-            const isLast = index === session.lastWindowIndex
-            const classes = [
-                'mux-window',
-                isCurrent ? 'active' : '',
-                isLast ? 'last' : '',
-            ].filter(Boolean).join(' ')
-            const markers = (isCurrent ? '*' : '') + (isLast && !isCurrent ? '-' : '')
-            parts.push(
-                `<span class="${classes}" data-window-id="${win.id}" ` +
-                `title="${escapeHtml(this.mux.windowTitle(win))}">` +
-                `${index}:${escapeHtml(this.mux.windowTitle(win))}${markers}</span>`)
-        })
-
-        // ---- pane info (only when a mux window is actually the active tab) ----
+        // ---- right side: pane info + system resources ----
         const right: string[] = []
         const activeWindow = this.mux.activeWindow
         if (this.mux.settings.statusBar.showPaneInfo && activeWindow?.session === session) {
@@ -206,11 +240,24 @@ export class MuxStatusbarService {
             const zoomed = activeWindow.tab.getMaximizedTab()
                 ? `<span class="mux-zoomed">${escapeHtml(this.i18n.t('mux.statusbar.zoomed'))}</span>`
                 : ''
-            right.push(`<span class="mux-info">${escapeHtml(info)}${zoomed}</span>`)
+            right.push(`<span class="mux-stat">${escapeHtml(info)}${zoomed}</span>`)
         }
-
-        parts.push('<span class="mux-spacer"></span>', ...right)
+        if (this.mux.settings.statusBar.showCpu) {
+            right.push(this.statSegment('fa-microchip', 'CPU', this.cpuUsage, '%'))
+        }
+        if (this.mux.settings.statusBar.showMem) {
+            right.push(this.statSegment('fa-memory', 'MEM', this.memUsage, '%'))
+        }
+        if (right.length) {
+            parts.push('<span class="mux-spacer"></span>', `<span class="mux-info">${right.join('')}</span>`)
+        }
         return parts.join('')
+    }
+
+    private statSegment (icon: string, label: string, value: number, suffix: string): string {
+        const warn = value >= 80 ? ' warn' : ''
+        return `<span class="mux-stat${warn}"><i class="fas ${icon}"></i>` +
+            `${label} ${value}${suffix}</span>`
     }
 
     private onClick (ev: MouseEvent): void {
@@ -224,15 +271,6 @@ export class MuxStatusbarService {
             const session = this.mux.sessions.find(s => s.id === id)
             if (session) {
                 this.mux.switchToSession(session)
-            }
-            return
-        }
-        const windowEl = target.closest('.mux-window') as HTMLElement | null
-        if (windowEl) {
-            const id = windowEl.dataset['windowId']
-            const win = this.mux.sessions.flatMap(s => s.windows).find(w => w.id === id)
-            if (win) {
-                this.mux.selectWindow(win)
             }
         }
     }

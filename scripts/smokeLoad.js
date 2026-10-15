@@ -70,6 +70,10 @@ const stubs = {
     'tabby-terminal': strictProxy('tabby-terminal', {
         BaseTerminalTabComponent: stubClass('BaseTerminalTabComponent'),
     }),
+    'tabby-settings': strictProxy('tabby-settings', {
+        SettingsTabProvider: stubClass('SettingsTabProvider'),
+    }),
+    'os': { cpus: () => [], freemem: () => 0, totalmem: () => 1 },
     'rxjs': { Subject: StubSubject, Subscription: StubSubscription },
     '@ng-bootstrap/ng-bootstrap': { NgbModal: stubClass('NgbModal') },
 }

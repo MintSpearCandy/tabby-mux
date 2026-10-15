@@ -39,10 +39,20 @@ export interface MuxStatusBarConfig {
     enabled: boolean
     height: number
     showPaneInfo: boolean
+    showCpu: boolean
+    showMem: boolean
+    /** System resource sampling interval in ms (>= 500). */
+    resourceIntervalMs: number
+}
+
+export interface MuxSidebarConfig {
+    enabled: boolean
+    width: number
 }
 
 export interface MuxSettings {
     statusBar: MuxStatusBarConfig
+    sidebar: MuxSidebarConfig
     /** Adopt top-level terminal tabs opened outside the plugin into the active session. */
     autoAdoptWindows: boolean
     /** Name for auto-created sessions; null = sequential numbers like tmux (0, 1, 2...). */
@@ -59,7 +69,15 @@ export interface MuxSettings {
 
 export function defaultMuxSettings (): MuxSettings {
     return {
-        statusBar: { enabled: true, height: 26, showPaneInfo: true },
+        statusBar: {
+            enabled: true,
+            height: 26,
+            showPaneInfo: true,
+            showCpu: true,
+            showMem: true,
+            resourceIntervalMs: 2000,
+        },
+        sidebar: { enabled: true, width: 150 },
         autoAdoptWindows: true,
         defaultSessionName: null,
         newWindowProfile: null,
