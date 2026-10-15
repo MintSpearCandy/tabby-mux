@@ -1,0 +1,45 @@
+{
+  "name": "tabby-mux",
+  "version": "0.1.0",
+  "description": "tmux-style session/window/pane management for Tabby",
+  "keywords": [
+    "tabby-plugin",
+    "tabby",
+    "terminal",
+    "tmux",
+    "multiplexer"
+  ],
+  "author": {
+    "name": "MSGhast"
+  },
+  "main": "dist/index.js",
+  "typings": "dist/index.d.ts",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && webpack --progress --color",
+    "watch": "webpack --progress --color --watch",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smokeLoad.js",
+    "deploy": "node scripts/updateDebugCfg.js",
+    "check": "npm run smoke && npm run typecheck && npm run build"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@angular/common": "^15.2.10",
+    "@angular/core": "^15.2.10",
+    "@angular/platform-browser": "^15.2.10",
+    "@ng-bootstrap/ng-bootstrap": "^14.2.0",
+    "@types/node": "^18.19.0",
+    "@types/webpack-env": "^1.18.8",
+    "rxjs": "^7.8.2",
+    "tabby-core": "^1.0.231-nightly.0",
+    "tabby-terminal": "^1.0.231-nightly.0",
+    "ts-loader": "^9.5.4",
+    "typescript": "^4.9.5",
+    "webpack": "^5.99.9",
+    "webpack-cli": "^4.10.0"
+  }
+}

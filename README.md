@@ -1,0 +1,68 @@
+# tabby-mux
+
+tmux-style session / window / pane management for [Tabby](https://tabby.sh).
+
+First milestone: the tmux hierarchy on top of Tabby's native tab engine.
+
+```
+tmux session → MuxSession   逻辑命名分组（插件侧运行时状态）
+tmux window  → 顶层 SplitTab（Tabby 原生分屏 tab，≥1 个 pane）
+tmux pane    → SplitTab 内的子终端（原生 split 引擎直管，插件不包装）
+```
+
+## 功能（v0.1）
+
+- **Session / Window / Pane 数据模型与管理服务**（`MuxService`）
+  - 自动领养：通过正常途径新开的终端 tab 自动归入当前会话；实例重启后恢复的 tab 同样被领养成窗口（会话按 tmux 风格编号 0,1,2…）
+  - 最后一个窗口关闭时会话自动消亡（tmux 语义）
+  - 新窗口继承当前焦点 pane 的 profile（无则回退第一个本地 shell）
+- **tmux 式底部状态栏**：`[会话名] 0:窗口名* 1:窗口名- … pane i/n`
+  - `*` 当前窗口、`-` 上一个使用的窗口（tmux 惯例），点击窗口名可切换
+  - 主题变量适配（`--theme-*`），跟随语言（中/英）
+- **35 个命令**：新建/重命名/关闭/切换 会话与窗口、选窗 1-9、
+  分割（tmux `%`/`"` 语义）、关闭/导航/缩放/均分/调整 窗格、切换状态栏
+  - 全部注册进**命令面板**（Ctrl-Shift-P）与**热键系统**
+  - 热键默认全部不绑定（避免与 Tabby 内置冲突），在 设置 → 热键 的
+    `mux.*` 分组里自行绑定
+- 工具栏按钮：新建 mux 会话
+
+## 调试句柄
+
+实例运行时 `window.tabbyMux` 暴露 `MuxService`（CDP 验证用）。
+
+## 开发
+
+```bash
+npm install
+npm run check        # smoke 加载自检 + typecheck + build
+npm run deploy       # 部署到隔离实例 D:\Env\TabbyEnv\instances\mux（需先 build）
+node scripts/cdpEval.js "<expr>"     # 对运行实例求值（CDP_PORT 默认 9242）
+node scripts/cdpConsole.js [秒]      # 抓 renderer console
+```
+
+## 热键绑定建议（tmux 直译）
+
+| tmux | 命令 | 建议绑定 |
+|---|---|---|
+| `prefix c` | mux.new-window | Ctrl-Shift-T*（与内置冲突，需先解绑） |
+| `prefix %` | mux.split-pane-right | （内置 split-right 已有 Ctrl-Shift-S） |
+| `prefix "` | mux.split-pane-bottom | （内置 split-bottom 已有 Ctrl-Shift-D） |
+| `prefix n/p` | mux.next-window / previous-window | Ctrl-Alt-Right / Left* |
+| `prefix 0-9` | mux.select-window-1..9 | — |
+| `prefix x` | mux.kill-pane | — |
+| `prefix z` | mux.pane-zoom | （内置 pane-maximize 已有 Ctrl-Alt-Enter） |
+| `prefix d` | detach | 未实现（一期无 detach） |
+
+标 `*` 的与 Tabby 默认绑定冲突，二选一。
+
+## Roadmap
+
+- [ ] prefix 前缀键两段式系统（`Ctrl-B` + 命令键）
+- [ ] 会话 detach / 持久化（Tabby recovery token 基础上）
+- [ ] tmux 布局模式（even-horizontal / main-horizontal / tiled）
+- [ ] 自研布局引擎（替换 SplitTab 承载，支持 pane 边框样式）
+- [ ] 设置页（SettingsTabProvider）
+
+## License
+
+MIT
