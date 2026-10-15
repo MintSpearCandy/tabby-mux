@@ -6,8 +6,11 @@ import {
     BaseTabComponent,
     ConfigService,
     HotkeysService,
+    MenuItemOptions,
+    PlatformService,
     ProfilesService,
     PromptModalComponent,
+    SelectorService,
     SplitTabComponent,
     TabRecoveryService,
     TabsService,
@@ -41,6 +44,7 @@ export class MuxService {
     private readonly profiles: ProfilesService
     private readonly config: ConfigService
     private readonly tabRecovery: TabRecoveryService
+    private readonly platform: PlatformService
     private readonly injector: Injector
     private readonly i18n: I18n
 
@@ -58,6 +62,7 @@ export class MuxService {
         this.profiles = injector.get(ProfilesService)
         this.config = injector.get(ConfigService)
         this.tabRecovery = injector.get(TabRecoveryService)
+        this.platform = injector.get(PlatformService)
         this.i18n = injector.get(I18n)
 
         // Debug handle for CDP-based verification of a running instance.
@@ -631,6 +636,65 @@ export class MuxService {
         this.config.store[CONFIG_KEY].templates = this.templates.filter(t => t !== template)
         await this.config.save()
         this.changed$.next()
+    }
+
+    /**
+     * Opens the searchable selector modal (the same one the profile picker
+     * uses) with every saved template; choosing one creates a session.
+     */
+    async browseTemplates (): Promise<void> {
+        if (!this.templates.length) {
+            return
+        }
+        const selector = this.injector.get(SelectorService)
+        const chosen = await selector.show<MuxSessionTemplate>(
+            this.i18n.t('mux.tmpl.section'),
+            this.templates.map(t => ({
+                name: t.name,
+                description: this.i18n.t('mux.settings.tplWindows', { n: t.windows.length }) +
+                    ` · ${new Date(t.createdAt).toLocaleString()}`,
+                icon: 'fas fa-bookmark',
+                result: t,
+            })))
+        if (chosen) {
+            await this.createSessionFromTemplate(chosen)
+        }
+    }
+
+    /** Right-click menu for a session (rail entries, status bar chips). */
+    sessionContextMenu (session: MuxSession, event: MouseEvent): void {
+        const items: MenuItemOptions[] = [
+            {
+                label: this.i18n.t('mux.session.saveTemplate'),
+                click: () => void this.saveSessionAsTemplatePrompt(session),
+            },
+            {
+                label: this.i18n.t('mux.session.rename'),
+                click: () => void this.renameSessionPrompt(session),
+            },
+            { type: 'separator' },
+            {
+                label: this.i18n.t('mux.session.kill'),
+                click: () => void this.killSession(session),
+            },
+        ]
+        this.platform.popupContextMenu(items, event)
+    }
+
+    /** Right-click menu for a template (rail entries). */
+    templateContextMenu (template: MuxSessionTemplate, event: MouseEvent): void {
+        const items: MenuItemOptions[] = [
+            {
+                label: this.i18n.t('mux.tmpl.apply'),
+                click: () => void this.createSessionFromTemplate(template),
+            },
+            { type: 'separator' },
+            {
+                label: this.i18n.t('mux.tmpl.delete'),
+                click: () => void this.deleteTemplate(template),
+            },
+        ]
+        this.platform.popupContextMenu(items, event)
     }
 
     // ==================================================================

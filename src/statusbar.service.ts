@@ -58,6 +58,17 @@ const STYLE = `
 #tabby-mux-statusbar .mux-info .mux-stat { display: inline-flex; align-items: center; gap: 4px; }
 #tabby-mux-statusbar .mux-info .mux-stat i { font-size: 11px; }
 #tabby-mux-statusbar .mux-info .mux-stat.warn { color: var(--theme-warning, #f0ad4e); }
+#tabby-mux-statusbar .mux-tmpl-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    color: var(--theme-fg-more, #999);
+    cursor: pointer;
+}
+#tabby-mux-statusbar .mux-tmpl-btn:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
+#tabby-mux-statusbar .mux-tmpl-btn i { font-size: 11px; }
 /* Make room for the bar by shrinking the app root (xterm refits via its
    ResizeObserver); the bar itself overlays the freed strip. */
 body.mux-statusbar-visible app-root { padding-bottom: var(--mux-statusbar-h, 26px); }
@@ -111,6 +122,7 @@ export class MuxStatusbarService {
         this.bar.id = BAR_ID
         document.body.appendChild(this.bar)
         this.bar.addEventListener('click', ev => this.onClick(ev))
+        this.bar.addEventListener('contextmenu', ev => this.onContextMenu(ev))
 
         this.mux.changed$.subscribe(() => this.scheduleRender())
         this.app.activeTabChange$.subscribe(() => this.scheduleRender())
@@ -251,6 +263,12 @@ export class MuxStatusbarService {
         if (right.length) {
             parts.push('<span class="mux-spacer"></span>', `<span class="mux-info">${right.join('')}</span>`)
         }
+        // Template browser entry (opens the searchable selector modal).
+        if (this.mux.templates.length) {
+            parts.push(
+                `<span class="mux-tmpl-btn" title="${escapeHtml(this.i18n.t('mux.tmpl.browse'))}">` +
+                `<i class="fas fa-bookmark"></i>${this.mux.templates.length}</span>`)
+        }
         return parts.join('')
     }
 
@@ -265,12 +283,32 @@ export class MuxStatusbarService {
         if (!target) {
             return
         }
+        if (target.closest('.mux-tmpl-btn')) {
+            void this.mux.browseTemplates()
+            return
+        }
         const sessionEl = target.closest('.mux-session-chip') as HTMLElement | null
         if (sessionEl) {
             const id = sessionEl.dataset['sessionId']
             const session = this.mux.sessions.find(s => s.id === id)
             if (session) {
                 this.mux.switchToSession(session)
+            }
+        }
+    }
+
+    private onContextMenu (ev: MouseEvent): void {
+        const target = ev.target as HTMLElement | null
+        if (!target) {
+            return
+        }
+        const sessionEl = target.closest('.mux-session-chip') as HTMLElement | null
+        if (sessionEl) {
+            const id = sessionEl.dataset['sessionId']
+            const session = this.mux.sessions.find(s => s.id === id)
+            if (session) {
+                ev.preventDefault()
+                this.mux.sessionContextMenu(session, ev)
             }
         }
     }

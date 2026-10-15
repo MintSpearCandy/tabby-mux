@@ -70,6 +70,16 @@ const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
         'mux.settings.tplWindows': '{n} window(s)',
         'mux.settings.tplApply': 'New session from this template',
         'mux.settings.tplDelete': 'Delete template',
+        // ---- template browsing / context menus ----
+        'mux.tmpl.section': 'Templates',
+        'mux.tmpl.search': 'Search templates...',
+        'mux.tmpl.browse': 'Browse templates and create a session',
+        'mux.tmpl.apply': 'New session from this template',
+        'mux.tmpl.delete': 'Delete template',
+        'mux.tmpl.none': '(no match)',
+        'mux.session.saveTemplate': 'Save as template',
+        'mux.session.rename': 'Rename session',
+        'mux.session.kill': 'Kill session',
     },
     zh: {
         'mux.newSession': 'Mux：新建会话',
@@ -136,6 +146,16 @@ const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
         'mux.settings.tplWindows': '{n} 个窗口',
         'mux.settings.tplApply': '从此模板新建会话',
         'mux.settings.tplDelete': '删除模板',
+        // ---- 模板浏览 / 右键菜单 ----
+        'mux.tmpl.section': '模板',
+        'mux.tmpl.search': '搜索模板…',
+        'mux.tmpl.browse': '浏览模板并新建会话',
+        'mux.tmpl.apply': '从此模板新建会话',
+        'mux.tmpl.delete': '删除模板',
+        'mux.tmpl.none': '（无匹配）',
+        'mux.session.saveTemplate': '保存为模板',
+        'mux.session.rename': '重命名会话',
+        'mux.session.kill': '关闭会话',
     },
 }
 

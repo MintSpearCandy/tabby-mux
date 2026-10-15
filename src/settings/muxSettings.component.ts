@@ -1,5 +1,6 @@
-import { Component, OnInit } from '@angular/core'
+import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core'
 import { ConfigService, ProfilesService } from 'tabby-core'
+import { Subscription } from 'rxjs'
 import { I18n } from '../i18n'
 import { CONFIG_KEY } from '../configKeys'
 import { MuxService } from '../mux.service'
@@ -216,29 +217,31 @@ import { MuxSessionTemplate } from '../types'
                 <span class="mux-tpl-meta">{{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }}
                     · {{ tpl.createdAt | date:'short' }}</span>
                 <div class="ms-auto d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-secondary"
-                            [title]="t('mux.settings.tplApply')" (click)="applyTemplate(tpl)">
-                        <i class="fas fa-play"></i>
+                    <button type="button" class="btn btn-sm btn-primary"
+                            (click)="applyTemplate(tpl)">
+                        <i class="fas fa-play me-1"></i>{{ t('mux.tmpl.apply') }}
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-danger"
-                            [title]="t('mux.settings.tplDelete')" (click)="deleteTemplate(tpl)">
-                        <i class="fas fa-trash-alt"></i>
+                            (click)="deleteTemplate(tpl)">
+                        <i class="fas fa-trash-alt me-1"></i>{{ t('mux.tmpl.delete') }}
                     </button>
                 </div>
             </div>
         </ng-container>
     `,
 })
-export class MuxSettingsComponent implements OnInit {
+export class MuxSettingsComponent implements OnInit, OnDestroy {
     tab = 'statusbar'
     settings: any
     profiles: any[] = []
+    private changedSub: Subscription | null = null
 
     constructor (
         private config: ConfigService,
         private profilesService: ProfilesService,
         private i18n: I18n,
         private mux: MuxService,
+        private cdr: ChangeDetectorRef,
     ) { }
 
     ngOnInit (): void {
@@ -246,6 +249,13 @@ export class MuxSettingsComponent implements OnInit {
         void this.profilesService.getProfiles().then(list => {
             this.profiles = list
         })
+        // A save from the prompt modal or another surface (rail context menu,
+        // palette) must show up here immediately.
+        this.changedSub = this.mux.changed$.subscribe(() => this.cdr.detectChanges())
+    }
+
+    ngOnDestroy (): void {
+        this.changedSub?.unsubscribe()
     }
 
     get templates (): MuxSessionTemplate[] {

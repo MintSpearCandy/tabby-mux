@@ -50,6 +50,8 @@ const tabbyCoreExports = {
     ProfilesService: stubClass('ProfilesService'),
     TabsService: stubClass('TabsService'),
     TabRecoveryService: stubClass('TabRecoveryService'),
+    PlatformService: stubClass('PlatformService'),
+    SelectorService: stubClass('SelectorService'),
     LocaleService: stubClass('LocaleService'),
 }
 tabbyCoreExports.default = { ...tabbyCoreExports }
