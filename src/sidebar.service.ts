@@ -68,13 +68,13 @@ const STYLE = `
     flex-shrink: 0;
 }
 #tabby-mux-rail .mux-rail-templates {
-    display: none;
+    display: flex;
     flex-direction: column;
     max-height: 40%;
     flex-shrink: 0;
     border-top: 1px solid var(--theme-bg-less, rgba(128,128,128,.2));
 }
-#tabby-mux-rail.has-templates .mux-rail-templates { display: flex; }
+#tabby-mux-rail.no-templates .mux-rail-search { display: none; }
 #tabby-mux-rail .mux-rail-search {
     margin: 2px 8px 4px;
     padding: 3px 8px;
@@ -283,11 +283,22 @@ export class MuxSidebarService {
             return
         }
         const templates = this.mux.templates
-        this.rail.classList.toggle('has-templates', templates.length > 0)
+        this.rail.classList.toggle('no-templates', templates.length === 0)
 
         const countEl = this.rail.querySelector('.mux-tpl-count')
         if (countEl) {
             countEl.textContent = templates.length ? `${templates.length}` : ''
+        }
+
+        // Empty state doubles as the save entry, so the template area is
+        // always discoverable even before the first template exists.
+        if (!templates.length) {
+            this.templatesEl.innerHTML =
+                `<div class="mux-rail-template mux-rail-save-entry" ` +
+                `title="${escapeHtml(this.i18n.t('mux.settings.tplSave'))}">` +
+                `<i class="fas fa-plus"></i>` +
+                `<span class="mux-rail-name">${escapeHtml(this.i18n.t('mux.settings.tplSave'))}</span></div>`
+            return
         }
 
         const needle = this.searchText.trim().toLowerCase()
@@ -295,10 +306,9 @@ export class MuxSidebarService {
             ? templates.filter(t => t.name.toLowerCase().includes(needle))
             : templates
         if (!filtered.length) {
-            this.templatesEl.innerHTML = templates.length
-                ? `<div class="mux-rail-template" style="cursor:default;opacity:.6">` +
-                  `${escapeHtml(this.i18n.t('mux.tmpl.none'))}</div>`
-                : ''
+            this.templatesEl.innerHTML =
+                `<div class="mux-rail-template" style="cursor:default;opacity:.6">` +
+                `${escapeHtml(this.i18n.t('mux.tmpl.none'))}</div>`
             return
         }
         const parts: string[] = []
@@ -319,6 +329,10 @@ export class MuxSidebarService {
         }
         if (target.closest('.mux-rail-new')) {
             void this.mux.createSessionWithWindow()
+            return
+        }
+        if (target.closest('.mux-rail-save-entry')) {
+            void this.mux.saveSessionAsTemplatePrompt(this.mux.activeSession)
             return
         }
         const templateEl = target.closest('.mux-rail-template') as HTMLElement | null

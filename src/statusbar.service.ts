@@ -263,12 +263,14 @@ export class MuxStatusbarService {
         if (right.length) {
             parts.push('<span class="mux-spacer"></span>', `<span class="mux-info">${right.join('')}</span>`)
         }
-        // Template browser entry (opens the searchable selector modal).
-        if (this.mux.templates.length) {
-            parts.push(
-                `<span class="mux-tmpl-btn" title="${escapeHtml(this.i18n.t('mux.tmpl.browse'))}">` +
-                `<i class="fas fa-bookmark"></i>${this.mux.templates.length}</span>`)
-        }
+        // Template entry - always visible: with templates it opens the
+        // searchable selector, without any it offers saving the current
+        // session (so the feature is discoverable from the very start).
+        const tmplCount = this.mux.templates.length
+        const tmplTitle = tmplCount ? this.i18n.t('mux.tmpl.browse') : this.i18n.t('mux.settings.tplSave')
+        parts.push(
+            `<span class="mux-tmpl-btn" title="${escapeHtml(tmplTitle)}">` +
+            `<i class="fas fa-bookmark"></i>${tmplCount ? tmplCount : '+'}</span>`)
         return parts.join('')
     }
 
@@ -284,7 +286,11 @@ export class MuxStatusbarService {
             return
         }
         if (target.closest('.mux-tmpl-btn')) {
-            void this.mux.browseTemplates()
+            if (this.mux.templates.length) {
+                void this.mux.browseTemplates()
+            } else {
+                void this.mux.saveSessionAsTemplatePrompt(this.mux.activeSession)
+            }
             return
         }
         const sessionEl = target.closest('.mux-session-chip') as HTMLElement | null

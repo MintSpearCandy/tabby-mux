@@ -59,6 +59,8 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - **模板**：`MuxSessionTemplate { id, name, createdAt, windows: RecoveryToken[] }`，存 `mux.templates`（config）。**ConfigProxy 的数组必须整组赋值才持久化**（`store.mux.templates = [...cur, tpl]`，push() 会被丢弃——workwench 同款结论）；保存 = 每窗口 `getRecoveryToken()`（新窗口要等 session 初始化，带 4×300ms 重试）；应用 = `tabRecovery.recoverTab(token)` → `tabsService.create` → 恢复出的是 SplitTabComponent（走 `addTabRaw` 而非 wrapAndAddTab）→ `registerWindow`，全程 `suppressAdoption++`。恢复的是同布局新 shell，非运行中进程。
 - **设置页页签**：内联模板组件自带样式（原生 `.form-line` 类 scoped 在 tabby-settings 组件内不可复用，自绘 `.mux-form-line` 结构 + 主题变量贴近原生观感）；开关用 `form-check form-switch`。动态命令（每模板一条 apply 入口）只在 CommandProvider.provide() 里追加，不进 MUX_COMMANDS（无热键 defaults）。
 - **closeTab 语义**：`app.closeTab(tab)` 默认**不检查 canClose**（checkCanClose 参数未默认为 true）；关闭前自动存 recovery token 到 closedTabsStack。多 pane SplitTab 的销毁链较长（逐 pane teardown + getFullRecoveryToken），CDP 测试断言前留足等待。
+- **PromptModalComponent 返回值**（2026-10-16 用户报告"保存无效果"的根因）：`modal.result` 在 OK 时 resolve **对象 `{value, remember}`**（不是字符串！）、cancel 时 resolve `null`、backdrop/esc 才 reject。取值必须 `result?.value`——`typeof result === 'string'` 判断会让所有弹窗流程静默 no-op。
+- **入口可见性设计**：模板入口（rail 模板区/底栏书签按钮）**常驻**而非"有模板才显示"——空态显示"保存当前会话为模板"引导项，0 模板时点击底栏按钮直接转保存。隐身入口 = 用户找不到功能。
 
 ## 常用命令
 

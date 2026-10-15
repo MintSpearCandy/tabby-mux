@@ -865,7 +865,10 @@ export class MuxService {
         modal.componentInstance.value = current
         try {
             const result = await modal.result
-            return typeof result === 'string' ? result : null
+            // PromptModalComponent.ok() resolves with {value, remember};
+            // cancel() resolves with null; backdrop/esc rejects.
+            const value = result && typeof result === 'object' ? (result as any).value : result
+            return typeof value === 'string' && value.length ? value : null
         } catch {
             return null // dismissed
         }
