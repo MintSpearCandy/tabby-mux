@@ -54,6 +54,12 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - **状态栏资源采样**：`os.cpus()` 两次采样差值算 CPU、`freemem/totalmem` 算内存；采样器跑在 `NgZone.runOutsideAngular`（纯 DOM 渲染不需要惊醒变更检测），config.changed$ 时重建采样器（间隔/开关热生效）。
 - **设置页**：`SettingsTabProvider`（tabby-settings，devDep）+ 内联模板组件（FormsModule + Bootstrap 类）。**npm typings 的基类 `title` 是属性**——子类用 getter 覆盖会 TS2611（BetterConfiger 走手写 declarations.d.ts 声明 accessor 的路线；本项目标题 locale 无关，直接字段）。配置控件 `[(ngModel)]` 直绑 `config.store.mux.*` 代理嵌套属性 + `(ngModelChange)="config.save()"`（嵌套属性赋值是 ConfigProxy 安全路径）。CDP 开设置页：`require('tabby-settings')` 可在 renderer 解析 → `app.openNewTabRaw({type: SettingsTabComponent, inputs:{activeTab:'mux'}})`。
 
+## 会话模板与设置页（2026-10-16 三轮实测）
+
+- **模板**：`MuxSessionTemplate { id, name, createdAt, windows: RecoveryToken[] }`，存 `mux.templates`（config）。**ConfigProxy 的数组必须整组赋值才持久化**（`store.mux.templates = [...cur, tpl]`，push() 会被丢弃——workwench 同款结论）；保存 = 每窗口 `getRecoveryToken()`（新窗口要等 session 初始化，带 4×300ms 重试）；应用 = `tabRecovery.recoverTab(token)` → `tabsService.create` → 恢复出的是 SplitTabComponent（走 `addTabRaw` 而非 wrapAndAddTab）→ `registerWindow`，全程 `suppressAdoption++`。恢复的是同布局新 shell，非运行中进程。
+- **设置页页签**：内联模板组件自带样式（原生 `.form-line` 类 scoped 在 tabby-settings 组件内不可复用，自绘 `.mux-form-line` 结构 + 主题变量贴近原生观感）；开关用 `form-check form-switch`。动态命令（每模板一条 apply 入口）只在 CommandProvider.provide() 里追加，不进 MUX_COMMANDS（无热键 defaults）。
+- **closeTab 语义**：`app.closeTab(tab)` 默认**不检查 canClose**（checkCanClose 参数未默认为 true）；关闭前自动存 recovery token 到 closedTabsStack。多 pane SplitTab 的销毁链较长（逐 pane teardown + getFullRecoveryToken），CDP 测试断言前留足等待。
+
 ## 常用命令
 
 ```bash

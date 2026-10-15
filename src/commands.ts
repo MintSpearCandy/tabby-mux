@@ -184,6 +184,12 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
     },
     // ---- misc ----
     {
+        id: 'mux.save-session-template',
+        labelKey: 'mux.saveSessionTemplate',
+        needsSession: true,
+        run: mux => mux.saveSessionAsTemplatePrompt(mux.activeSession),
+    },
+    {
         id: 'mux.toggle-statusbar',
         labelKey: 'mux.toggleStatusbar',
         run: mux => mux.toggleStatusbar(),
@@ -238,6 +244,16 @@ export class MuxCommandProvider extends CommandProvider {
                 await spec.run(mux)
             }
             out.push(command)
+        }
+        // One dynamic entry per saved template (palette-only, no hotkeys).
+        for (const tpl of mux.templates) {
+            const apply = new Command()
+            apply.id = `mux.apply-template:${tpl.id}`
+            apply.label = i18n.t('mux.applySessionTemplate', { name: tpl.name })
+            apply.run = async () => {
+                await mux.createSessionFromTemplate(tpl)
+            }
+            out.push(apply)
         }
         return out
     }

@@ -50,9 +50,23 @@ export interface MuxSidebarConfig {
     width: number
 }
 
+/**
+ * A saved workspace snapshot: per window, the SplitTab's recovery token
+ * (captures the pane layout + each terminal's profile/cwd). Applying a
+ * template reopens fresh shells in the same layout.
+ */
+export interface MuxSessionTemplate {
+    id: string
+    name: string
+    createdAt: number
+    windows: any[]
+}
+
 export interface MuxSettings {
     statusBar: MuxStatusBarConfig
     sidebar: MuxSidebarConfig
+    /** Saved session templates (whole-array assignment persists, see MuxService). */
+    templates: MuxSessionTemplate[]
     /** Adopt top-level terminal tabs opened outside the plugin into the active session. */
     autoAdoptWindows: boolean
     /** Name for auto-created sessions; null = sequential numbers like tmux (0, 1, 2...). */
@@ -78,6 +92,7 @@ export function defaultMuxSettings (): MuxSettings {
             resourceIntervalMs: 2000,
         },
         sidebar: { enabled: true, width: 150 },
+        templates: [],
         autoAdoptWindows: true,
         defaultSessionName: null,
         newWindowProfile: null,

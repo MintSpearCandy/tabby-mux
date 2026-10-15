@@ -9,12 +9,13 @@ import {
     ProfilesService,
     PromptModalComponent,
     SplitTabComponent,
+    TabRecoveryService,
     TabsService,
 } from 'tabby-core'
 import { CONFIG_KEY, DEBUG_HANDLE } from './configKeys'
 import { MUX_COMMANDS } from './commands'
 import { I18n } from './i18n'
-import { defaultMuxSettings, MuxSession, MuxSettings, MuxWindow } from './types'
+import { defaultMuxSettings, MuxSession, MuxSessionTemplate, MuxSettings, MuxWindow } from './types'
 import { MuxStatusbarService } from './statusbar.service'
 import { MuxSidebarService } from './sidebar.service'
 
@@ -39,6 +40,7 @@ export class MuxService {
     private readonly tabsService: TabsService
     private readonly profiles: ProfilesService
     private readonly config: ConfigService
+    private readonly tabRecovery: TabRecoveryService
     private readonly injector: Injector
     private readonly i18n: I18n
 
@@ -55,6 +57,7 @@ export class MuxService {
         this.tabsService = injector.get(TabsService)
         this.profiles = injector.get(ProfilesService)
         this.config = injector.get(ConfigService)
+        this.tabRecovery = injector.get(TabRecoveryService)
         this.i18n = injector.get(I18n)
 
         // Debug handle for CDP-based verification of a running instance.
@@ -523,6 +526,111 @@ export class MuxService {
             return
         }
         await spec.run(this)
+    }
+
+    // ==================================================================
+    // Session templates
+    // ==================================================================
+
+    get templates (): MuxSessionTemplate[] {
+        return this.settings.templates ?? []
+    }
+
+    /**
+     * Captures a session's workspace (window layouts + terminal profiles)
+     * via each window's recovery token. Persisted through whole-array
+     * assignment - the ConfigProxy drops mutations made via push() on
+     * proxied arrays (workwench-documented pitfall).
+     */
+    async saveSessionAsTemplate (session: MuxSession | null, name: string): Promise<MuxSessionTemplate | null> {
+        const trimmed = name.trim()
+        if (!session || !trimmed || !session.windows.length) {
+            return null
+        }
+        const windows: any[] = []
+        for (const win of session.windows) {
+            // Recovery tokens of freshly created tabs appear only after
+            // session init - retry briefly before giving up on a window.
+            let token = await win.tab.getRecoveryToken()
+            for (let i = 0; !token && i < 4; i++) {
+                await new Promise(resolve => setTimeout(resolve, 300))
+                token = await win.tab.getRecoveryToken()
+            }
+            if (token) {
+                windows.push(token)
+            }
+        }
+        if (!windows.length) {
+            return null
+        }
+        const template: MuxSessionTemplate = {
+            id: `tpl-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+            name: trimmed,
+            createdAt: Date.now(),
+            windows,
+        }
+        this.config.store[CONFIG_KEY].templates = [...this.templates, template]
+        await this.config.save()
+        this.changed$.next()
+        return template
+    }
+
+    async saveSessionAsTemplatePrompt (session: MuxSession | null): Promise<MuxSessionTemplate | null> {
+        if (!session) {
+            return null
+        }
+        const result = await this.promptText('mux.templatePrompt', session.name)
+        if (result === null) {
+            return null
+        }
+        return this.saveSessionAsTemplate(session, result)
+    }
+
+    /**
+     * Rebuilds a session from a template: fresh shells in the saved layout
+     * (recovery restores profiles/cwd, not running processes).
+     */
+    async createSessionFromTemplate (template: MuxSessionTemplate): Promise<MuxSession | null> {
+        if (this.isolated && this.attachedSession) {
+            this.detachSession(this.attachedSession)
+        }
+        const session = this.newSession(template.name)
+        this.suppressAdoption++
+        try {
+            for (const token of template.windows) {
+                const params = await this.tabRecovery.recoverTab(token)
+                if (!params) {
+                    continue
+                }
+                const tab = this.tabsService.create(params)
+                if (!(tab instanceof SplitTabComponent)) {
+                    tab.destroy()
+                    continue
+                }
+                if (!this.app.tabs.includes(tab)) {
+                    this.app.addTabRaw(tab)
+                }
+                this.registerWindow(session, tab)
+            }
+        } finally {
+            this.suppressAdoption--
+        }
+        if (!session.windows.length) {
+            this.sessions = this.sessions.filter(s => s !== session)
+            this.changed$.next()
+            return null
+        }
+        if (this.isolated) {
+            this.attachSession(session)
+        }
+        this.changed$.next()
+        return session
+    }
+
+    async deleteTemplate (template: MuxSessionTemplate): Promise<void> {
+        this.config.store[CONFIG_KEY].templates = this.templates.filter(t => t !== template)
+        await this.config.save()
+        this.changed$.next()
     }
 
     // ==================================================================

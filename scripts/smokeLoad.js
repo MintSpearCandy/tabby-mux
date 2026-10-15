@@ -49,6 +49,7 @@ const tabbyCoreExports = {
     HotkeysService: stubClass('HotkeysService'),
     ProfilesService: stubClass('ProfilesService'),
     TabsService: stubClass('TabsService'),
+    TabRecoveryService: stubClass('TabRecoveryService'),
     LocaleService: stubClass('LocaleService'),
 }
 tabbyCoreExports.default = { ...tabbyCoreExports }
