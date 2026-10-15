@@ -27,6 +27,16 @@ scripts/
 - 本地终端组件在 tabby-local（`TerminalTabComponent`），但插件经 `ProfilesService.newTabParametersForProfile()` 拿 `NewTabParameters`，**无需 import** tabby-local。
 - npm typings 锁 `1.0.231-nightly.0`：与 1.0.237 宿主有个别漂移（如 `setCustomTitle` 缺失）——已用 `(tab as any)` + 注释处理，新 API 先查 typings。
 
+## 会话附着/隔离机制（2026-10-16 实测验证）
+
+tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
+
+- **软移除**：`app.removeTab(tab)` **不销毁 tab**——tab-body 的 `ngOnDestroy` 只 `placeholder.detach()`（tabBody.component.ts），组件/终端会话/xterm 全部存活；且此路径**不发射 `tabRemoved$`**（它只在 destroyed$ 链上发射），插件注册表天然无需清理。
+- **恢复**：`app.addTabRaw(tab)` → `*ngFor` 新建 tab-body → `ngOnChanges` `setImmediate` 后 `placeholder.insert(tab.hostView)` 重插视图 → xterm ResizeObserver 自动 refit。
+- 附着不变式：隔离模式下 `attachedSessionId` 唯一；`applyIsolationSetting()`（boot + config.changed$）做 reconcile——**混合→隔离切换必须撤下所有非 keep 会话的已列出窗口**（只处理 attached 会话不够，2026-10-16 实测踩过）。
+- 后台会话不在 app.tabs → **不进 Tabby 崩溃恢复快照**（重启即失，README 已注明）。
+- detached 窗口的 kill 走 `canClose() + tab.destroy()` 直连（closeTab 只认已列出 tab）；destroy → destroyed$ → addTabRaw 的订阅 → tabRemoved$ → 注册表自清。
+
 ## 已验证的平台坑（2026-10-16 实测，别再踩）
 
 1. **type-only import 不能出现在构造器参数类型里**：`constructor (private x: SomeService)` + `import type` → `emitDecoratorMetadata` 写入 `Function` 作为 token → Angular 注入字面量 `Function` → `NullInjectorError: No provider for Function!` → **整个 bootstrap 失败**（宿主降级重启后本插件消失、其余插件正常——极具迷惑性）。服务依赖一律 `Injector + 运行时 get()`。

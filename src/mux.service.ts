@@ -86,10 +86,32 @@ export class MuxService {
         return this.config.store?.[CONFIG_KEY] ?? defaultMuxSettings()
     }
 
-    /** Session of the currently active top-level tab, if it is a mux window. */
+    get isolated (): boolean {
+        return this.settings.isolatedSessions
+    }
+
+    /**
+     * The session whose windows are currently attached (listed in the tab
+     * bar). Only meaningful in isolation mode; in mixed mode it tracks the
+     * session of the active tab as a switching baseline.
+     */
+    get attachedSession (): MuxSession | null {
+        return this.sessions.find(s => s.id === this.attachedSessionId) ?? null
+    }
+
+    /**
+     * Session commands operate on. In isolation mode this is the attached
+     * session (even when a non-mux tab like settings is active); in mixed
+     * mode it derives from the active tab.
+     */
     get activeSession (): MuxSession | null {
+        if (this.isolated) {
+            return this.attachedSession
+        }
         return this.activeWindow?.session ?? null
     }
+
+    private attachedSessionId: string | null = null
 
     get activeWindow (): MuxWindow | null {
         const tab = this.app.activeTab
@@ -139,6 +161,11 @@ export class MuxService {
     }
 
     async createSessionWithWindow (name?: string | null): Promise<MuxSession> {
+        // tmux `new-session`: detach the currently attached session first so
+        // the new session's window opens into an isolated tab bar.
+        if (this.isolated && this.attachedSession) {
+            this.detachSession(this.attachedSession)
+        }
         const session = this.newSession(name)
         await this.newWindow(session)
         return session
@@ -172,17 +199,120 @@ export class MuxService {
         }
     }
 
-    switchSession (delta: number): void {
-        if (!this.sessions.length) {
+    // ==================================================================
+    // Session attachment (tmux-style tab bar isolation)
+    // ==================================================================
+
+    /**
+     * Soft-removes every window of the session from the tab bar. Components
+     * and terminal sessions stay alive: app.removeTab does not destroy tabs,
+     * and the destroyed tab-body only detaches the host view
+     * (tabBody.component.ts ngOnDestroy -> placeholder.detach()).
+     * tabRemoved$ is NOT emitted by this path (it only fires on destroy), so
+     * the plugin registry stays untouched.
+     */
+    private detachSession (session: MuxSession): void {
+        if (session.id !== this.attachedSessionId) {
             return
         }
-        const current = this.sessions.indexOf(this.activeSession ?? this.sessions[0])
-        const target = (current + delta + this.sessions.length) % this.sessions.length
-        const session = this.sessions[target]
+        for (const win of [...session.windows]) {
+            const index = this.app.tabs.indexOf(win.tab)
+            if (index !== -1) {
+                this.app.removeTab(win.tab)
+            }
+        }
+        this.attachedSessionId = null
+        this.changed$.next()
+    }
+
+    /**
+     * Attaches a session: detaches the currently attached one (if any) and
+     * re-lists the target session's windows. addTabRaw re-creates a tab-body
+     * per window whose ngOnChanges re-inserts the preserved host view, so the
+     * terminal renders again and its ResizeObserver refits the PTY.
+     */
+    attachSession (session: MuxSession): void {
+        const current = this.attachedSession
+        if (current === session) {
+            return
+        }
+        if (current) {
+            this.detachSession(current)
+        }
+        for (const win of session.windows) {
+            if (!this.app.tabs.includes(win.tab)) {
+                this.app.addTabRaw(win.tab)
+            }
+        }
+        this.attachedSessionId = session.id
         const win = session.windows[Math.max(0, session.currentWindowIndex)]
         if (win) {
             this.app.selectTab(win.tab)
         }
+        this.changed$.next()
+    }
+
+    /** Mode-aware session switch (status bar chips, switch-session commands). */
+    switchToSession (session: MuxSession): void {
+        if (this.isolated) {
+            this.attachSession(session)
+            return
+        }
+        const win = session.windows[Math.max(0, session.currentWindowIndex)]
+        if (win) {
+            this.app.selectTab(win.tab)
+        }
+    }
+
+    /**
+     * Reconciles the tab bar with the current isolation setting. Idempotent;
+     * runs on boot and on every config change.
+     */
+    private applyIsolationSetting (): void {
+        if (this.isolated) {
+            const keep = this.activeWindow?.session ?? this.attachedSession ?? this.sessions[0]
+            if (!keep) {
+                return
+            }
+            // Un-list every other session's windows. Beyond detaching the
+            // previously attached session this also covers the
+            // mixed -> isolated transition, where several sessions' tabs are
+            // in the bar at once.
+            for (const session of this.sessions) {
+                if (session === keep) {
+                    continue
+                }
+                for (const win of session.windows) {
+                    const index = this.app.tabs.indexOf(win.tab)
+                    if (index !== -1) {
+                        this.app.removeTab(win.tab)
+                    }
+                }
+            }
+            if (this.attachedSessionId && this.attachedSessionId !== keep.id) {
+                this.attachedSessionId = null
+            }
+            this.attachSession(keep)
+            this.changed$.next()
+        } else {
+            // Mixed mode: every session's windows are listed.
+            for (const session of this.sessions) {
+                for (const win of session.windows) {
+                    if (!this.app.tabs.includes(win.tab)) {
+                        this.app.addTabRaw(win.tab)
+                    }
+                }
+            }
+        }
+    }
+
+    switchSession (delta: number): void {
+        if (!this.sessions.length) {
+            return
+        }
+        const current = this.sessions.indexOf(this.attachedSession ?? this.activeSession ?? this.sessions[0])
+        const target = (current + delta + this.sessions.length) % this.sessions.length
+        this.switchToSession(this.sessions[target])
     }
 
     // ==================================================================
@@ -195,6 +325,11 @@ export class MuxService {
      */
     async newWindow (session?: MuxSession, profile?: any): Promise<MuxWindow | null> {
         const targetSession = session ?? this.activeSession ?? this.newSession()
+        if (this.isolated && this.attachedSession !== targetSession) {
+            // Bring the target session into view first so the new window
+            // lands inside an isolated tab bar.
+            this.attachSession(targetSession)
+        }
         const resolved = profile ?? await this.resolveProfile(targetSession)
         if (!resolved) {
             return null
@@ -219,7 +354,16 @@ export class MuxService {
         if (!win) {
             return
         }
-        await this.app.closeTab(win.tab)
+        if (this.app.tabs.includes(win.tab)) {
+            await this.app.closeTab(win.tab)
+        } else {
+            // Detached window: closeTab only works on listed tabs. Destroying
+            // directly still fires tabRemoved$ (via addTabRaw's destroyed$
+            // subscription), so the registry prunes itself.
+            if (await win.tab.canClose()) {
+                win.tab.destroy()
+            }
+        }
     }
 
     selectWindow (win: MuxWindow): void {
@@ -353,6 +497,12 @@ export class MuxService {
         await this.config.save()
     }
 
+    async toggleIsolation (): Promise<void> {
+        this.config.store[CONFIG_KEY].isolatedSessions = !this.settings.isolatedSessions
+        await this.config.save()
+        // applyIsolationSetting runs via config.changed$.
+    }
+
     /** Central dispatcher shared by hotkeys and the palette. */
     async runCommand (id: string): Promise<void> {
         const spec = MUX_COMMANDS.find(c => c.id === id)
@@ -438,7 +588,9 @@ export class MuxService {
         this.app.tabOpened$.subscribe(tab => this.tryAdopt(tab))
         this.app.tabRemoved$.subscribe(tab => this.pruneWindow(tab))
         this.app.activeTabChange$.subscribe(tab => this.trackActiveWindow(tab))
+        this.config.changed$.subscribe(() => this.applyIsolationSetting())
 
+        this.applyIsolationSetting()
         this.injector.get(MuxStatusbarService).start()
 
         this.changed$.next()
@@ -453,6 +605,17 @@ export class MuxService {
             return
         }
         if (this.windowByTab.has(tab) || !this.settings.autoAdoptWindows) {
+            return
+        }
+        if (this.isolated) {
+            // New terminal tabs join the attached session (or found one); the
+            // tab is already listed, so no re-attachment is needed.
+            let session = this.attachedSession
+            if (!session) {
+                session = this.newSession()
+                this.attachedSessionId = session.id
+            }
+            this.registerWindow(session, tab)
             return
         }
         const session = this.activeSession ?? this.newSession()
@@ -471,8 +634,16 @@ export class MuxService {
         const session = win.session
         session.windows = session.windows.filter(w => w !== win)
         if (!session.windows.length) {
-            // tmux kills a session when its last window closes.
+            // tmux kills a session when its last window closes; when the
+            // attached session dies, the most recently created remaining one
+            // takes over the tab bar.
             this.sessions = this.sessions.filter(s => s !== session)
+            if (this.attachedSessionId === session.id) {
+                this.attachedSessionId = null
+                if (this.isolated && this.sessions.length) {
+                    this.attachSession(this.sessions[this.sessions.length - 1])
+                }
+            }
         } else {
             if (session.currentWindowIndex >= session.windows.length) {
                 session.currentWindowIndex = session.windows.length - 1
@@ -493,6 +664,11 @@ export class MuxService {
             return
         }
         const session = win.session
+        // In mixed mode the attached baseline follows the active tab so that
+        // toggling isolation on keeps the current session in view.
+        if (!this.isolated) {
+            this.attachedSessionId = session.id
+        }
         const index = session.windows.indexOf(win)
         if (index === session.currentWindowIndex) {
             return

@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smokeLoad.js",
     "deploy": "node scripts/updateDebugCfg.js",
-    "check": "npm run smoke && npm run typecheck && npm run build"
+    "check": "npm run build && npm run smoke && npm run typecheck"
   },
   "license": "MIT",
   "engines": {

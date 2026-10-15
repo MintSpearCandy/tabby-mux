@@ -30,16 +30,26 @@ const STYLE = `
     cursor: default;
 }
 #tabby-mux-statusbar.visible { display: flex; }
-#tabby-mux-statusbar .mux-session {
+#tabby-mux-statusbar .mux-session-chip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-weight: 600;
     padding: 3px 8px;
+    border-radius: 3px;
     cursor: pointer;
 }
-#tabby-mux-statusbar .mux-session:hover { text-decoration: underline; }
-#tabby-mux-statusbar .mux-session i { font-size: 11px; opacity: .8; }
+#tabby-mux-statusbar .mux-session-chip i { font-size: 11px; opacity: .8; }
+#tabby-mux-statusbar .mux-session-chip:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
+#tabby-mux-statusbar .mux-session-chip.attached {
+    font-weight: 600;
+    background: var(--theme-primary, #0d6efd);
+    color: var(--theme-primary-fg, #fff);
+}
+#tabby-mux-statusbar .mux-session-chip.detached { color: var(--theme-fg-more, #999); }
+#tabby-mux-statusbar .mux-sep {
+    margin: 0 6px 0 4px;
+    color: var(--theme-fg-more-2, #666);
+}
 #tabby-mux-statusbar .mux-window {
     display: inline-flex;
     align-items: center;
@@ -68,10 +78,13 @@ body.mux-statusbar-visible app-root { padding-bottom: var(--mux-statusbar-h, 26p
 `
 
 /**
- * tmux-style bottom status bar: [session] 0:win 1:win* 2:win- ... pane i/n.
+ * tmux-style bottom status bar:
+ *   [s0*] [s1] [s2] | 0:win 1:win* 2:win- ... pane i/n
  *
- * Tabby has no status bar extension point, so the bar is injected as a fixed
- * overlay on document.body (TerminalWorkwench's host-injection pattern).
+ * Session chips switch attachment (tmux attach semantics); the window list
+ * always shows the bar session's windows. Tabby has no status bar extension
+ * point, so the bar is injected as a fixed overlay on document.body
+ * (TerminalWorkwench's host-injection pattern).
  */
 @Injectable({ providedIn: 'root' })
 export class MuxStatusbarService {
@@ -130,7 +143,9 @@ export class MuxStatusbarService {
             return
         }
         const settings = this.mux.settings
-        const session = this.mux.activeSession
+        // In isolation mode the bar tracks the attached session even when a
+        // non-mux tab (settings, ...) is active - it is the session dashboard.
+        const session = this.mux.isolated ? this.mux.attachedSession : this.mux.activeSession
         const show = settings.statusBar.enabled && !!session
 
         document.documentElement.style.setProperty(
@@ -148,11 +163,23 @@ export class MuxStatusbarService {
     private buildHtml (session: MuxSession): string {
         const parts: string[] = []
 
-        const sessionTitle = this.i18n.t('mux.statusbar.session', { name: session.name })
-        parts.push(
-            `<span class="mux-session" title="${escapeHtml(sessionTitle)}">` +
-            `<i class="fas fa-layer-group"></i>${escapeHtml(session.name)}</span>`)
+        // ---- session chips (attach switcher) ----
+        for (const s of this.mux.sessions) {
+            const isAttached = s === (this.mux.attachedSession ?? session)
+            const classes = [
+                'mux-session-chip',
+                isAttached ? 'attached' : 'detached',
+            ].join(' ')
+            const label = escapeHtml(s.name) +
+                (isAttached || s.windows.length === 1 ? '' : ` (${s.windows.length})`)
+            parts.push(
+                `<span class="${classes}" data-session-id="${s.id}" ` +
+                `title="${escapeHtml(this.i18n.t('mux.statusbar.session', { name: s.name }))}">` +
+                `<i class="fas fa-layer-group"></i>${label}</span>`)
+        }
+        parts.push('<span class="mux-sep">|</span>')
 
+        // ---- window list of the bar session ----
         session.windows.forEach((win, index) => {
             const isCurrent = index === session.currentWindowIndex
             const isLast = index === session.lastWindowIndex
@@ -168,9 +195,10 @@ export class MuxStatusbarService {
                 `${index}:${escapeHtml(this.mux.windowTitle(win))}${markers}</span>`)
         })
 
+        // ---- pane info (only when a mux window is actually the active tab) ----
         const right: string[] = []
-        const activeWindow = session.windows[session.currentWindowIndex] ?? session.windows[0]
-        if (this.mux.settings.statusBar.showPaneInfo && activeWindow) {
+        const activeWindow = this.mux.activeWindow
+        if (this.mux.settings.statusBar.showPaneInfo && activeWindow?.session === session) {
             const panes = activeWindow.tab.getAllTabs()
             const focused = activeWindow.tab.getFocusedTab()
             const current = focused ? panes.indexOf(focused) + 1 : 0
@@ -190,6 +218,15 @@ export class MuxStatusbarService {
         if (!target) {
             return
         }
+        const sessionEl = target.closest('.mux-session-chip') as HTMLElement | null
+        if (sessionEl) {
+            const id = sessionEl.dataset['sessionId']
+            const session = this.mux.sessions.find(s => s.id === id)
+            if (session) {
+                this.mux.switchToSession(session)
+            }
+            return
+        }
         const windowEl = target.closest('.mux-window') as HTMLElement | null
         if (windowEl) {
             const id = windowEl.dataset['windowId']
@@ -197,10 +234,6 @@ export class MuxStatusbarService {
             if (win) {
                 this.mux.selectWindow(win)
             }
-            return
-        }
-        if (target.closest('.mux-session')) {
-            this.mux.switchSession(1)
         }
     }
 }

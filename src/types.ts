@@ -49,6 +49,12 @@ export interface MuxSettings {
     defaultSessionName: string | null
     /** Profile id used for new windows; null = inherit focused pane, then first local profile. */
     newWindowProfile: string | null
+    /**
+     * tmux-style attachment: only the attached session's windows are listed
+     * in the tab bar; other sessions' windows are soft-removed (terminals
+     * keep running) and restored when their session is attached.
+     */
+    isolatedSessions: boolean
 }
 
 export function defaultMuxSettings (): MuxSettings {
@@ -57,5 +63,6 @@ export function defaultMuxSettings (): MuxSettings {
         autoAdoptWindows: true,
         defaultSessionName: null,
         newWindowProfile: null,
+        isolatedSessions: true,
     }
 }
