@@ -62,12 +62,16 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - **PromptModalComponent 返回值**（2026-10-16 用户报告"保存无效果"的根因）：`modal.result` 在 OK 时 resolve **对象 `{value, remember}`**（不是字符串！）、cancel 时 resolve `null`、backdrop/esc 才 reject。取值必须 `result?.value`——`typeof result === 'string'` 判断会让所有弹窗流程静默 no-op。
 - **入口可见性设计**：模板入口（rail 模板区/底栏书签按钮）**常驻**而非"有模板才显示"——空态显示"保存当前会话为模板"引导项，0 模板时点击底栏按钮直接转保存。隐身入口 = 用户找不到功能。
 
-## 模板编辑器（2026-10-16 四轮实测）
+## 模板：布局 spec 格式 + 图形编辑器（2026-10-16 五轮重构）
 
-- **token 结构**：窗口 = `{type:'app:split-tab', ratios, orientation:'h'|'v', children:[...]}`（任意带 children 数组的节点即容器）；窗格叶子 = `{type:'app:local-tab'|…, profile:{id,name,options:{command,cwd,…}}, tabTitle,…}`。编辑 = 直接变异这棵 JSON 树（`src/template.model.ts`：normalize 会丢弃空容器/提升单子容器并均分 ratios）。
-- **@angular/cdk/drag-drop 可作 external**：宿主因 tabby-core 依赖 CDK 而在 app.asar node_modules 保有该包，插件 webpack externals 的 `/^@angular/` 直接覆盖；smokeLoad 需补 stub。设置页组件有测试句柄 `window.__muxSettingsComponent`。
-- 删除窗口最后一个窗格必须连带删窗口（空容器恢复出坏窗口）；startEdit 时过滤空窗口以自愈旧数据。
-- `PlatformService.showMessageBox` 用于"未保存离开"确认：`{buttons, defaultId, cancelId}` → `result.response` 为按钮下标。
+- **数据模型**（types.ts）：`MuxSessionTemplate.windows: MuxWindowSpec[]`，每窗口 = `layout` 树（容器 `{orientation, ratios, children}` / 叶子 `{pane: MuxPaneSpec}`）；`MuxPaneSpec` 二选一：`profileId`（**引用**，应用时 registry 现取）或内嵌 `profile`（**分叉副本**）。旧 token 格式在 boot 时 `migrateTemplates()` 一次性转换。
+- **引用判定**（template.model.profilesMatch）：id + name + command + args 相等即引用；**cwd 故意不比**——运行中 pane 的 options.cwd 是解析后的启动目录（还有 `restoreFromPTYID`、`__getValue` 等 ConfigProxy 函数键/会话残留），都是启动期物化而非用户修改。嵌入时 stripRuntimeFields 清洗这些键。
+- **应用路径**（buildWindowFromSpec）：`tabsService.create({type: SplitTabComponent})` → `addTabRaw` → **`await split.initialized$`**（视图就绪，zone 外调用会挂！）→ 逐叶子 `newTabParametersForProfile` + `tabsService.create` + `(split as any).attachTabView(tab)` + `tab.parent = split` → 用 **`new SplitContainer()` 递归构建真树**赋给 `split.root`（不能用裸对象，引擎会调 root.getAllTabs()）→ `split.layout()` + `focus(first)`。
+- **捕获**：直读 `win.tab.root`（SplitContainer）——比 getRecoveryToken 可靠（无初始化竞态）。
+- **图形画布**：递归 ng-template（`context: {$implicit, path}`），ratios → `flex-grow`（cell 包一层做 flex item）；结构变异前**先捕获 pane 对象**再 `findPathByPane` 恢复选中（normalizeSpec 会提升容器改变路径）。
+- **提升 Profile**：`ProfilesService.newProfile(profile)`（genId 默认 true，生成 `local:custom:<name>:<uuid>` id）→ pane 转回引用。注意：**没有 removeProfile API**（删除要走 config）。
+- @angular/cdk/drag-drop 作 external 可用（宿主为 tabby-core 保留 CDK）；设置页测试句柄 `window.__muxSettingsComponent`。
+- 删除窗口最后一个窗格必须连带删窗口；startEdit 过滤空窗口自愈旧数据。`PlatformService.showMessageBox`：`{buttons, defaultId, cancelId}` → `result.response` 按钮下标。
 
 ## 常用命令
 

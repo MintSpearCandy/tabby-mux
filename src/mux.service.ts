@@ -11,14 +11,31 @@ import {
     ProfilesService,
     PromptModalComponent,
     SelectorService,
+    SplitContainer,
     SplitTabComponent,
-    TabRecoveryService,
     TabsService,
 } from 'tabby-core'
 import { CONFIG_KEY, DEBUG_HANDLE } from './configKeys'
 import { MUX_COMMANDS } from './commands'
 import { I18n } from './i18n'
-import { defaultMuxSettings, MuxSession, MuxSessionTemplate, MuxSettings, MuxWindow } from './types'
+import {
+    defaultMuxSettings,
+    isLayoutContainer,
+    MuxLayoutNode,
+    MuxPaneSpec,
+    MuxSession,
+    MuxSessionTemplate,
+    MuxSettings,
+    MuxWindow,
+    MuxWindowSpec,
+} from './types'
+import {
+    captureLayout,
+    deepClone,
+    specPaneAt,
+    specPanes,
+    tokenToSpec,
+} from './template.model'
 import { MuxStatusbarService } from './statusbar.service'
 import { MuxSidebarService } from './sidebar.service'
 
@@ -43,7 +60,6 @@ export class MuxService {
     private readonly tabsService: TabsService
     private readonly profiles: ProfilesService
     private readonly config: ConfigService
-    private readonly tabRecovery: TabRecoveryService
     private readonly platform: PlatformService
     private readonly injector: Injector
     private readonly i18n: I18n
@@ -61,7 +77,6 @@ export class MuxService {
         this.tabsService = injector.get(TabsService)
         this.profiles = injector.get(ProfilesService)
         this.config = injector.get(ConfigService)
-        this.tabRecovery = injector.get(TabRecoveryService)
         this.platform = injector.get(PlatformService)
         this.i18n = injector.get(I18n)
 
@@ -542,28 +557,23 @@ export class MuxService {
     }
 
     /**
-     * Captures a session's workspace (window layouts + terminal profiles)
-     * via each window's recovery token. Persisted through whole-array
-     * assignment - the ConfigProxy drops mutations made via push() on
-     * proxied arrays (workwench-documented pitfall).
+     * Captures a session's workspace as layout specs, read directly from the
+     * live SplitContainer trees (no recovery-token round-trip, so freshly
+     * created windows capture reliably). Panes whose profile still matches
+     * the registry are stored as references; modified ones embed a copy.
      */
     async saveSessionAsTemplate (session: MuxSession | null, name: string): Promise<MuxSessionTemplate | null> {
         const trimmed = name.trim()
         if (!session || !trimmed || !session.windows.length) {
             return null
         }
-        const windows: any[] = []
+        const registry = await this.profiles.getProfiles()
+        const windows: MuxWindowSpec[] = []
         for (const win of session.windows) {
-            // Recovery tokens of freshly created tabs appear only after
-            // session init - retry briefly before giving up on a window.
-            let token = await win.tab.getRecoveryToken()
-            for (let i = 0; !token && i < 4; i++) {
-                await new Promise(resolve => setTimeout(resolve, 300))
-                token = await win.tab.getRecoveryToken()
+            if (!win.tab.getAllTabs().length) {
+                continue
             }
-            if (token) {
-                windows.push(token)
-            }
+            windows.push({ layout: captureLayout(win.tab.root, tab => (tab as any).profile, registry) })
         }
         if (!windows.length) {
             return null
@@ -592,8 +602,9 @@ export class MuxService {
     }
 
     /**
-     * Rebuilds a session from a template: fresh shells in the saved layout
-     * (recovery restores profiles/cwd, not running processes).
+     * Rebuilds a session from a template: fresh shells in the saved layout.
+     * Reference panes resolve their profile at apply time ("连接式直取");
+     * embedded panes use their stored copy.
      */
     async createSessionFromTemplate (template: MuxSessionTemplate): Promise<MuxSession | null> {
         if (this.isolated && this.attachedSession) {
@@ -602,20 +613,11 @@ export class MuxService {
         const session = this.newSession(template.name)
         this.suppressAdoption++
         try {
-            for (const token of template.windows) {
-                const params = await this.tabRecovery.recoverTab(token)
-                if (!params) {
-                    continue
+            for (const windowSpec of template.windows) {
+                const split = await this.buildWindowFromSpec(windowSpec)
+                if (split) {
+                    this.registerWindow(session, split)
                 }
-                const tab = this.tabsService.create(params)
-                if (!(tab instanceof SplitTabComponent)) {
-                    tab.destroy()
-                    continue
-                }
-                if (!this.app.tabs.includes(tab)) {
-                    this.app.addTabRaw(tab)
-                }
-                this.registerWindow(session, tab)
             }
         } finally {
             this.suppressAdoption--
@@ -632,6 +634,74 @@ export class MuxService {
         return session
     }
 
+    /**
+     * Constructs one window from a layout spec: creates the SplitTab shell,
+     * lets it render (initialized$), creates one terminal per leaf and
+     * attaches it, then installs a real SplitContainer tree with the
+     * authored orientation/ratios.
+     */
+    private async buildWindowFromSpec (spec: MuxWindowSpec): Promise<SplitTabComponent | null> {
+        const leaves = specPanes(spec.layout)
+        if (!leaves.length) {
+            return null
+        }
+        const registry = await this.profiles.getProfiles()
+        const split = this.tabsService.create({ type: SplitTabComponent })
+        this.app.addTabRaw(split)
+        // addTabRaw rendered the shell only after a change-detection pass;
+        // the split engine itself awaits this before attaching views.
+        await split.initialized$.toPromise()
+        const tabsByPath = new Map<string, BaseTabComponent>()
+        for (const info of leaves) {
+            const profile = info.profileId
+                ? registry.find(p => p.id === info.profileId) ?? null
+                : null
+            const resolved = profile ?? deepClone(specPaneAt(spec.layout, info.path)?.profile ?? null)
+            if (!resolved) {
+                continue
+            }
+            const params = await this.profiles.newTabParametersForProfile(resolved)
+            if (!params) {
+                continue
+            }
+            const tab = this.tabsService.create(params)
+            tab.parent = split
+            ;(split as any).attachTabView(tab)
+            tabsByPath.set(info.path.join('.'), tab)
+        }
+        const buildTree = (node: MuxLayoutNode, path: number[]): SplitContainer | BaseTabComponent | null => {
+            if (!isLayoutContainer(node)) {
+                return tabsByPath.get(path.join('.')) ?? null
+            }
+            const container = new SplitContainer()
+            container.orientation = node.orientation
+            for (let i = 0; i < node.children.length; i++) {
+                const child = buildTree(node.children[i], [...path, i])
+                if (child) {
+                    container.children.push(child)
+                }
+            }
+            if (!container.children.length) {
+                return null
+            }
+            container.ratios = container.children.map((_, i) => node.ratios?.[i] ?? 1 / container.children.length)
+            return container
+        }
+        const tree = buildTree(spec.layout, [])
+        if (!tree || !(tree instanceof SplitContainer)) {
+            split.destroy()
+            return null
+        }
+        split.root = tree
+        split.layout()
+        const first = tree.getAllTabs()[0]
+        if (first) {
+            split.focus(first)
+        }
+        ;(split as any).updateTitle?.()
+        return split
+    }
+
     async deleteTemplate (template: MuxSessionTemplate): Promise<void> {
         this.config.store[CONFIG_KEY].templates = this.templates.filter(t => t !== template)
         await this.config.save()
@@ -646,9 +716,56 @@ export class MuxService {
         this.changed$.next()
     }
 
-    /** Live recovery token of a session window, for importing into a template. */
-    async windowToken (win: MuxWindow): Promise<any | null> {
-        return await win.tab.getRecoveryToken()
+    /** Captures one live session window as a layout spec (editor import). */
+    async captureWindowSpec (win: MuxWindow): Promise<MuxWindowSpec | null> {
+        if (!win.tab.getAllTabs().length) {
+            return null
+        }
+        const registry = await this.profiles.getProfiles()
+        return { layout: captureLayout(win.tab.root, tab => (tab as any).profile, registry) }
+    }
+
+    /**
+     * Promotes an embedded pane config into a real Tabby profile
+     * ("保存为新的连接与配置") and switches the pane to reference it.
+     */
+    async promotePaneProfile (pane: MuxPaneSpec, name: string): Promise<string | null> {
+        const trimmed = name.trim()
+        if (!pane.profile || !trimmed) {
+            return null
+        }
+        const profile = deepClone(pane.profile)
+        profile.name = trimmed
+        await this.profiles.newProfile(profile)
+        pane.profileId = profile.id
+        pane.profile = null
+        this.changed$.next()
+        return profile.id ?? null
+    }
+
+    /**
+     * Boot migration: templates saved in the legacy recovery-token format
+     * are converted to layout specs once.
+     */
+    private async migrateTemplates (): Promise<void> {
+        let changed = false
+        const registry = await this.profiles.getProfiles()
+        const migrated = this.templates.map(tpl => {
+            const isLegacy = tpl.windows?.some((w: any) => w?.type === 'app:split-tab' || w?.layout === undefined)
+            if (!isLegacy) {
+                return tpl
+            }
+            changed = true
+            return {
+                ...tpl,
+                windows: (tpl.windows ?? []).map((w: any) => w?.layout ? w : tokenToSpec(w, registry)),
+            }
+        })
+        if (changed) {
+            this.config.store[CONFIG_KEY].templates = migrated
+            await this.config.save()
+            this.changed$.next()
+        }
     }
 
     /**
@@ -781,6 +898,8 @@ export class MuxService {
         this.app.tabRemoved$.subscribe(tab => this.pruneWindow(tab))
         this.app.activeTabChange$.subscribe(tab => this.trackActiveWindow(tab))
         this.config.changed$.subscribe(() => this.applyIsolationSetting())
+
+        void this.migrateTemplates()
 
         this.applyIsolationSetting()
         this.injector.get(MuxStatusbarService).start()

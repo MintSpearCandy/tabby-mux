@@ -1,188 +1,278 @@
+import { isLayoutContainer, MuxLayoutContainer, MuxLayoutNode, MuxPaneSpec } from './types'
+
 /**
- * Structural helpers for editing SplitTab recovery tokens in place.
+ * Layout-spec helpers: structural editing, capture from live SplitTab trees
+ * (or legacy recovery tokens), and display summaries.
  *
- * Token shapes (verified against a live 1.0.237 instance):
- *   window  { type: 'app:split-tab', ratios: number[], orientation: 'h'|'v', children: node[] }
- *   pane    { type: 'app:local-tab' | ..., profile: {...}, tabTitle, ... }
- * Any node carrying a `children` array is a container. After every structural
- * mutation the tree is normalized (empty containers dropped, single-child
- * containers hoisted) and every container's ratios are equalized - the
- * editor deliberately does not expose numeric ratio editing.
+ * Spec shapes (see types.ts): containers carry orientation + ratios, leaves
+ * carry a MuxPaneSpec (profile reference or embedded copy). After every
+ * structural mutation, degenerate containers are pruned and ratios are
+ * equalized - numeric ratio editing is deliberately not exposed.
  */
 
-export interface PaneInfo {
-    /** Flat visual order of the pane within its window. */
-    index: number
-    /** Recovery type discriminator, e.g. 'app:local-tab'. */
-    type: string
+// ============================================================================
+// Display
+// ============================================================================
+
+export interface SpecPaneInfo {
+    /** Path of child indexes from the root to this leaf. */
+    path: number[]
     profileName: string
-    profileId: string | null
+    badge: 'ref' | 'copy'
     cwd: string | null
     command: string | null
+    profileId: string | null
 }
 
-export function isContainer (node: any): boolean {
-    return node && Array.isArray(node.children)
-}
-
-/** Depth-first leaves of a window token, in visual order. */
-export function windowPanes (windowToken: any): PaneInfo[] {
-    const panes: PaneInfo[] = []
-    const walk = (node: any) => {
-        if (isContainer(node)) {
-            for (const child of node.children) {
-                walk(child)
-            }
-            return
-        }
-        const profile = node?.profile ?? {}
+export function specPanes (node: MuxLayoutNode, base: number[] = []): SpecPaneInfo[] {
+    if (!isLayoutContainer(node)) {
+        const pane: MuxPaneSpec = node.pane ?? { profileId: null, profile: null }
+        const profile = pane.profile ?? {} as any
         const options = profile.options ?? {}
-        panes.push({
-            index: panes.length,
-            type: node?.type ?? '?',
-            profileName: profile.name ?? node?.tabTitle ?? '?',
-            profileId: profile.id ?? null,
+        return [{
+            path: base,
+            profileName: profile.name ?? pane.profileId ?? '?',
+            badge: pane.profileId ? 'ref' : 'copy',
             cwd: options.cwd ?? null,
             command: options.command ?? null,
-        })
+            profileId: pane.profileId,
+        }]
     }
-    walk(windowToken)
-    return panes
+    return node.children.flatMap((child, i) => specPanes(child, [...base, i]))
 }
 
-/** Human summary of a window token for list rows. */
-export function windowSummary (windowToken: any): { panes: number, profile: string } {
-    const panes = windowPanes(windowToken)
+export function specSummary (window: { layout: MuxLayoutContainer }): { panes: number, profile: string } {
+    const panes = specPanes(window.layout)
     return {
         panes: panes.length,
         profile: panes[0]?.profileName ?? '?',
     }
 }
 
-/** Recursively equalize ratios and hoist degenerate containers. */
-export function normalize (node: any): void {
-    if (!isContainer(node)) {
+// ============================================================================
+// Structural editing (path-based)
+// ============================================================================
+
+export function nodeAtPath (root: MuxLayoutContainer, path: number[]): MuxLayoutNode | null {
+    let node: MuxLayoutNode = root
+    for (const index of path) {
+        if (!isLayoutContainer(node) || index >= node.children.length) {
+            return null
+        }
+        node = node.children[index]
+    }
+    return node
+}
+
+export function specPaneAt (root: MuxLayoutContainer, path: number[]): MuxPaneSpec | null {
+    const node = nodeAtPath(root, path)
+    return node && !isLayoutContainer(node) ? node.pane : null
+}
+
+export function equalize (node: MuxLayoutNode): void {
+    if (!isLayoutContainer(node)) {
         return
     }
-    node.children = node.children.filter(c => c)
-    for (const child of node.children) {
-        normalize(child)
-    }
-    // Drop empty nested containers; hoist single-child ones into the parent.
-    const hoisted: any[] = []
-    for (const child of node.children) {
-        if (isContainer(child)) {
-            if (!child.children.length) {
-                continue
-            }
-            if (child.children.length === 1) {
-                hoisted.push(child.children[0])
-                continue
-            }
-        }
-        hoisted.push(child)
-    }
-    node.children = hoisted
+    node.children.forEach(equalize)
     node.ratios = node.children.map(() => 1 / Math.max(1, node.children.length))
-    node.ratios.forEach(() => {})
-}
-
-function findAndMutateLeaf (
-    node: any,
-    targetFlatIndex: number,
-    mutate: (parent: any, index: number, leaf: any) => boolean,
-): boolean {
-    if (!isContainer(node)) {
-        return false
-    }
-    let flat = 0
-    for (let i = 0; i < node.children.length; i++) {
-        const child = node.children[i]
-        if (isContainer(child)) {
-            const consumed = countLeaves(child)
-            if (targetFlatIndex < flat + consumed) {
-                if (findAndMutateLeaf(child, targetFlatIndex - flat, mutate)) {
-                    return true
-                }
-            }
-            flat += consumed
-        } else {
-            if (flat === targetFlatIndex) {
-                return mutate(node, i, child)
-            }
-            flat++
-        }
-    }
-    return false
-}
-
-function countLeaves (node: any): number {
-    if (!isContainer(node)) {
-        return 1
-    }
-    return node.children.reduce((sum: number, c: any) => sum + countLeaves(c), 0)
-}
-
-export function deletePane (windowToken: any, flatIndex: number): void {
-    findAndMutateLeaf(windowToken, flatIndex, (parent, index) => {
-        parent.children.splice(index, 1)
-        parent.ratios.splice(index, 1)
-        return true
-    })
-    normalize(windowToken)
-}
-
-export function duplicatePane (windowToken: any, flatIndex: number): void {
-    findAndMutateLeaf(windowToken, flatIndex, (parent, index, leaf) => {
-        const clone = JSON.parse(JSON.stringify(leaf))
-        parent.children.splice(index + 1, 0, clone)
-        parent.ratios.splice(index + 1, 0, parent.ratios[index] ?? 0.5)
-        return true
-    })
-    normalize(windowToken)
 }
 
 /**
- * Appends a pane built from a profile. When the window already has panes,
- * the new one clones an existing pane token and swaps the profile (keeping
- * the recovery shape valid for non-local types too); otherwise a minimal
- * local-tab token is synthesized.
+ * Prunes empty containers and hoists single-child containers into their
+ * grandparent (the root container itself is always kept).
  */
-export function appendPane (windowToken: any, profile: any): void {
-    let token: any
-    const panes = collectLeaves(windowToken)
-    if (panes.length) {
-        token = JSON.parse(JSON.stringify(panes[panes.length - 1]))
-        token.profile = JSON.parse(JSON.stringify(profile))
-        token.tabTitle = profile.name ?? token.tabTitle
-        token.tabCustomTitle = ''
+export function normalizeSpec (root: MuxLayoutContainer): void {
+    const prune = (node: MuxLayoutContainer) => {
+        for (const child of node.children) {
+            if (isLayoutContainer(child)) {
+                prune(child)
+            }
+        }
+        const kept: MuxLayoutNode[] = []
+        for (const child of node.children) {
+            if (isLayoutContainer(child)) {
+                if (!child.children.length) {
+                    continue
+                }
+                if (child.children.length === 1 && node !== root) {
+                    kept.push(child.children[0])
+                    continue
+                }
+                if (child.children.length === 1 && node === root) {
+                    // hoist within root: keep container if orientation
+                    // differs, else splice its child into root
+                    if (child.orientation === node.orientation) {
+                        kept.push(...child.children)
+                        continue
+                    }
+                }
+            }
+            kept.push(child)
+        }
+        node.children = kept
+        node.ratios = node.children.map(() => 1 / Math.max(1, node.children.length))
+    }
+    prune(root)
+    equalize(root)
+}
+
+/**
+ * Splits the leaf at `path` in `direction`: inserts a sibling pane after it,
+ * wrapping the leaf into a new container when the parent's orientation does
+ * not match.
+ */
+export function splitSpecAt (
+    root: MuxLayoutContainer,
+    path: number[],
+    direction: 'h' | 'v',
+    newPane: MuxPaneSpec,
+): void {
+    if (!path.length) {
+        return
+    }
+    const parentPath = path.slice(0, -1)
+    const index = path[path.length - 1]
+    const parent = nodeAtPath(root, parentPath)
+    if (!parent || !isLayoutContainer(parent)) {
+        return
+    }
+    const leaf = parent.children[index]
+    const fresh: MuxLayoutNode = { pane: newPane }
+    if (parent.orientation === direction) {
+        parent.children.splice(index + 1, 0, fresh)
     } else {
-        token = {
-            type: 'app:local-tab',
-            profile: JSON.parse(JSON.stringify(profile)),
-            tabTitle: profile.name ?? '',
-            tabCustomTitle: '',
-            tabCustomTitleVisible: true,
-            tabPinned: false,
+        const wrapper: MuxLayoutContainer = {
+            orientation: direction,
+            ratios: [0.5, 0.5],
+            children: [leaf, fresh],
+        }
+        parent.children[index] = wrapper
+    }
+    normalizeSpec(root)
+}
+
+export function deleteSpecAt (root: MuxLayoutContainer, path: number[]): void {
+    if (!path.length) {
+        return
+    }
+    const parentPath = path.slice(0, -1)
+    const index = path[path.length - 1]
+    const parent = nodeAtPath(root, parentPath)
+    if (!parent || !isLayoutContainer(parent)) {
+        return
+    }
+    parent.children.splice(index, 1)
+    normalizeSpec(root)
+}
+
+export function duplicateSpecAt (root: MuxLayoutContainer, path: number[]): void {
+    if (!path.length) {
+        return
+    }
+    const parentPath = path.slice(0, -1)
+    const index = path[path.length - 1]
+    const parent = nodeAtPath(root, parentPath)
+    if (!parent || !isLayoutContainer(parent)) {
+        return
+    }
+    const clone = JSON.parse(JSON.stringify(parent.children[index]))
+    parent.children.splice(index + 1, 0, clone)
+    normalizeSpec(root)
+}
+
+// ============================================================================
+// Capture: live SplitTab tree / legacy recovery token -> spec
+// ============================================================================
+
+/**
+ * Maps a live pane profile to a spec pane: reference (profileId) when a
+ * registry profile with the same id still matches its identity fields,
+ * embedded copy otherwise.
+ */
+export function paneSpecFromProfile (liveProfile: any, registry: any[]): MuxPaneSpec {
+    if (liveProfile?.id) {
+        const match = registry.find(p => p.id === liveProfile.id)
+        if (match && profilesMatch(match, liveProfile)) {
+            return { profileId: liveProfile.id, profile: null }
         }
     }
-    windowToken.children.push(token)
-    normalize(windowToken)
+    return { profileId: null, profile: stripRuntimeFields(liveProfile) }
 }
 
-function collectLeaves (node: any): any[] {
-    if (!isContainer(node)) {
-        return [node]
+function profilesMatch (registryProfile: any, liveProfile: any): boolean {
+    const a = registryProfile?.options ?? {}
+    const b = liveProfile?.options ?? {}
+    // cwd is deliberately ignored: the live pane carries the resolved launch
+    // directory, not a user modification. restoreFromPTYID / __-prefixed
+    // keys are session artifacts and never compared.
+    return registryProfile?.name === liveProfile?.name
+        && a.command === b.command
+        && JSON.stringify(a.args ?? []) === JSON.stringify(b.args ?? [])
+}
+
+/** Drops bulky/runtime-only fields before embedding a profile copy. */
+export function stripRuntimeFields (profile: any): any {
+    if (!profile) {
+        return null
     }
-    return node.children.flatMap(c => collectLeaves(c))
+    const copy = JSON.parse(JSON.stringify(profile))
+    delete copy.icon
+    delete copy.color
+    delete copy.weight
+    delete copy.isBuiltin
+    delete copy.isTemplate
+    delete copy.disableDynamicTitle
+    if (copy.options && typeof copy.options === 'object') {
+        for (const key of Object.keys(copy.options)) {
+            if (key.startsWith('__') || key === 'restoreFromPTYID') {
+                delete copy.options[key]
+            }
+        }
+    }
+    return copy
 }
 
-export function getRootOrientation (windowToken: any): 'h' | 'v' {
-    return windowToken?.orientation === 'v' ? 'v' : 'h'
+/** Captures a live SplitContainer tree (SplitTab.root) as a layout spec. */
+export function captureLayout (
+    root: any,
+    leafProfileOf: (tab: any) => any,
+    registry: any[],
+): MuxLayoutContainer {
+    const walk = (node: any): MuxLayoutNode => {
+        if (node && Array.isArray(node.children)) {
+            return {
+                orientation: node.orientation === 'v' ? 'v' : 'h',
+                ratios: [...(node.ratios ?? [])],
+                children: node.children.map(walk),
+            }
+        }
+        return { pane: paneSpecFromProfile(leafProfileOf(node), registry) }
+    }
+    const spec = walk(root)
+    if (!isLayoutContainer(spec)) {
+        return { orientation: 'h', ratios: [1], children: [spec] }
+    }
+    return spec
 }
 
-export function setRootOrientation (windowToken: any, orientation: 'h' | 'v'): void {
-    windowToken.orientation = orientation
+/** Converts a legacy recovery-token window into a spec (boot migration). */
+export function tokenToSpec (token: any, registry: any[]): MuxWindowSpecInput {
+    const walk = (node: any): MuxLayoutNode => {
+        if (node && Array.isArray(node.children)) {
+            return {
+                orientation: node.orientation === 'v' ? 'v' : 'h',
+                ratios: [...(node.ratios ?? [])],
+                children: node.children.map(walk),
+            }
+        }
+        return { pane: paneSpecFromProfile(node?.profile, registry) }
+    }
+    const layout = walk(token)
+    return { layout: isLayoutContainer(layout) ? layout : { orientation: 'h', ratios: [1], children: [layout] } }
+}
+
+export interface MuxWindowSpecInput {
+    layout: MuxLayoutContainer
 }
 
 export function deepClone<T> (value: T): T {

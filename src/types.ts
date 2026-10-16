@@ -51,15 +51,51 @@ export interface MuxSidebarConfig {
 }
 
 /**
- * A saved workspace snapshot: per window, the SplitTab's recovery token
- * (captures the pane layout + each terminal's profile/cwd). Applying a
- * template reopens fresh shells in the same layout.
+ * A pane's terminal source. Reference semantics: `profileId` points at a
+ * live Tabby profile and is resolved at apply time (edits to the profile
+ * are picked up); once the user modifies the config, the pane forks to an
+ * embedded `profile` copy stored with the template ("修改后独立保存").
+ * Exactly one of the two is set.
+ */
+export interface MuxPaneSpec {
+    profileId: string | null
+    profile: any | null
+}
+
+/** Layout tree: a container splits its children by orientation + ratios. */
+export interface MuxLayoutContainer {
+    orientation: 'h' | 'v'
+    ratios: number[]
+    children: MuxLayoutNode[]
+    pane?: undefined
+}
+
+/** Layout tree: a leaf holds one pane spec. */
+export interface MuxLayoutLeaf {
+    pane: MuxPaneSpec
+    children?: undefined
+}
+
+export type MuxLayoutNode = MuxLayoutContainer | MuxLayoutLeaf
+
+export function isLayoutContainer (node: MuxLayoutNode | any): node is MuxLayoutContainer {
+    return node && Array.isArray(node.children)
+}
+
+export interface MuxWindowSpec {
+    layout: MuxLayoutContainer
+}
+
+/**
+ * A saved workspace snapshot: a list of window layout specs. Applying a
+ * template rebuilds each window with fresh shells (profiles resolved from
+ * references or embedded copies - not running processes).
  */
 export interface MuxSessionTemplate {
     id: string
     name: string
     createdAt: number
-    windows: any[]
+    windows: MuxWindowSpec[]
 }
 
 export interface MuxSettings {
