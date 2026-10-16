@@ -791,6 +791,31 @@ export class MuxService {
         }
     }
 
+    /** The host's searchable profile/connection picker. */
+    async pickProfile (): Promise<any | null> {
+        return await this.profiles.showProfileSelector()
+    }
+
+    /** Searchable picker over the live sessions' windows (editor import). */
+    async pickSessionWindow (): Promise<MuxWindow | null> {
+        const options = []
+        for (const session of this.sessions) {
+            session.windows.forEach((win, i) => {
+                options.push({
+                    name: `${this.i18n.t('mux.edit.window', { n: i + 1 })} · ${session.name}`,
+                    description: this.windowTitle(win),
+                    icon: 'fas fa-window-maximize',
+                    result: win,
+                })
+            })
+        }
+        if (!options.length) {
+            return null
+        }
+        const selector = this.injector.get(SelectorService)
+        return await selector.show<MuxWindow>(this.i18n.t('mux.edit.importWindow'), options)
+    }
+
     /** Right-click menu for a session (rail entries, status bar chips). */
     sessionContextMenu (session: MuxSession, event: MouseEvent): void {
         const items: MenuItemOptions[] = [

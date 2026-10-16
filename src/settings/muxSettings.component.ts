@@ -1,6 +1,6 @@
 import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop'
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core'
-import { ConfigService, PlatformService, ProfilesService } from 'tabby-core'
+import { ConfigService, MenuItemOptions, PlatformService, ProfilesService } from 'tabby-core'
 import { Subscription } from 'rxjs'
 import { I18n } from '../i18n'
 import { CONFIG_KEY } from '../configKeys'
@@ -350,7 +350,8 @@ import {
 
             <div class="mux-tpl-meta mb-1">{{ t('mux.edit.windows') }}</div>
             <div cdkDropList (cdkDropListDropped)="windowDropped($event)">
-                <div *ngFor="let w of editing.windows; let i = index" class="mux-tpl-row mux-edit-window" cdkDrag>
+                <div *ngFor="let w of editing.windows; let i = index" class="mux-tpl-row mux-edit-window" cdkDrag
+                 (contextmenu)="windowContextMenu($event, i)">
                     <i class="fas fa-grip-vertical mux-drag-handle" cdkDragHandle title="⇕"></i>
                     <span class="mux-tpl-name">{{ t('mux.edit.window', { n: i + 1 }) }}</span>
                     <span class="mux-tpl-meta">
@@ -361,12 +362,6 @@ import {
                                 [disabled]="i === 0" [title]="t('mux.edit.up')" (click)="moveWindow(i, -1)">↑</button>
                         <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
                                 [disabled]="i === editing.windows.length - 1" [title]="t('mux.edit.down')" (click)="moveWindow(i, 1)">↓</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                [title]="t('mux.edit.duplicate')" (click)="duplicateWindow(i)">
-                            <i class="fas fa-copy"></i></button>
-                        <button type="button" class="btn btn-sm btn-outline-danger mux-btn-sq"
-                                [title]="t('mux.edit.remove')" (click)="removeWindow(i)">
-                            <i class="fas fa-trash-alt"></i></button>
                         <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
                                 (click)="expanded = expanded === i ? null : i">
                             <ng-container *ngIf="expanded !== i">{{ t('mux.edit.expand') }} ▾</ng-container>
@@ -387,30 +382,17 @@ import {
                             <span class="mux-badge" [class.copy]="!p.profileId">
                                 {{ p.profileId ? t('mux.ge.ref') : t('mux.ge.copy') }}
                             </span>
-                            <div class="ms-auto d-flex gap-1">
-                                <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                        (click)="splitSelected('h')"><i class="fas fa-columns me-1"></i>{{ t('mux.ge.splitH') }}</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                        (click)="splitSelected('v')"><i class="fas fa-rows me-1"></i>{{ t('mux.ge.splitV') }}</button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                        [title]="t('mux.edit.duplicate')" (click)="duplicateSelected()">
-                                    <i class="fas fa-copy"></i></button>
-                                <button type="button" class="btn btn-sm btn-outline-danger mux-btn-sq"
-                                        [title]="t('mux.edit.remove')" (click)="deleteSelected()">
-                                    <i class="fas fa-trash-alt"></i></button>
-                            </div>
+                            <span class="mux-tpl-meta ms-2">{{ t('mux.ge.menuHint') }}</span>
                         </div>
 
-                        <div class="mux-inline-field">
-                            <label>{{ t('mux.settings.profile') }}</label>
-                            <select class="form-select form-select-sm" style="width: 260px"
-                                    [ngModel]="p.profileId ?? ''"
-                                    (ngModelChange)="switchReference($event)">
-                                <option *ngFor="let pr of profiles" [ngValue]="pr.id">{{ pr.name }} ({{ pr.type }})</option>
-                            </select>
-                            <button *ngIf="p.profileId" type="button" class="btn btn-sm btn-outline-secondary"
-                                    (click)="forkSelected()">{{ t('mux.ge.fork') }}</button>
-                        </div>
+                        <ng-container *ngIf="p.profileId">
+                            <div class="mux-inline-field">
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                        (click)="assignProfile()">
+                                    <i class="fas fa-search me-1"></i>{{ t('mux.ge.assignProfile') }}
+                                </button>
+                            </div>
+                        </ng-container>
 
                         <ng-container *ngIf="!p.profileId">
                             <div class="mux-inline-field">
@@ -444,25 +426,11 @@ import {
             <div *ngIf="!editing.windows.length" class="mux-tpl-empty">{{ t('mux.edit.noWindows') }}</div>
 
             <div class="d-flex align-items-center gap-2 flex-wrap mt-3">
-                <select class="form-select form-select-sm" style="width: 260px"
-                        [(ngModel)]="importWindowKey">
-                    <option value="">{{ t('mux.edit.importWindow') }}…</option>
-                    <option *ngFor="let opt of importableWindows" [ngValue]="opt.key">
-                        {{ opt.label }}
-                    </option>
-                </select>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        [disabled]="!importWindowKey" (click)="importWindow()">
-                    <i class="fas fa-download me-1"></i>{{ t('mux.edit.importWindow') }}
+                <button type="button" class="btn btn-sm btn-outline-secondary" (click)="importWindow()">
+                    <i class="fas fa-download me-1"></i>{{ t('mux.edit.importWindow') }}…
                 </button>
-                <select class="form-select form-select-sm" style="width: 220px"
-                        [(ngModel)]="blankProfileId">
-                    <option value="">{{ t('mux.edit.addBlankWindow') }}…</option>
-                    <option *ngFor="let p of profiles" [ngValue]="p.id">{{ p.name }} ({{ p.type }})</option>
-                </select>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        [disabled]="!blankProfileId" (click)="addBlankWindow()">
-                    <i class="fas fa-plus me-1"></i>
+                <button type="button" class="btn btn-sm btn-outline-secondary" (click)="addBlankWindow()">
+                    <i class="fas fa-plus me-1"></i>{{ t('mux.edit.addBlankWindow') }}…
                 </button>
             </div>
         </ng-container>
@@ -477,7 +445,8 @@ import {
                 </div>
             </ng-container>
             <div *ngIf="!isContainer(node)" class="mux-gpane"
-                 [class.selected]="isSelected(path)" (click)="selectPane($event, path)">
+                 [class.selected]="isSelected(path)" (click)="selectPane($event, path)"
+                 (contextmenu)="paneContextMenu($event, path)">
                 <i class="fas fa-terminal"></i>
                 <span class="mux-gname">{{ paneLabel(node.pane) }}</span>
                 <span class="mux-badge" [class.copy]="!node.pane.profileId">
@@ -499,8 +468,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     expanded: number | null = null
     selectedPath: number[] | null = null
     promoteName = ''
-    blankProfileId = ''
-    importWindowKey = ''
 
     constructor (
         private config: ConfigService,
@@ -565,8 +532,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         this.expanded = null
         this.selectedPath = null
         this.promoteName = ''
-        this.blankProfileId = ''
-        this.importWindowKey = ''
     }
 
     backFromEditor (): void {
@@ -671,24 +636,29 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         return specSummary(windowSpec)
     }
 
-    get importableWindows (): { key: string, label: string }[] {
-        const out: { key: string, label: string }[] = []
-        for (const session of this.mux.sessions) {
-            session.windows.forEach((win, i) => {
-                out.push({
-                    key: `${win.id}`,
-                    label: `${session.name} · ${this.t('mux.edit.window', { n: i + 1 })}`,
-                })
-            })
-        }
-        return out
+    /** Right-click menu on a window row (duplicate / remove moved here). */
+    windowContextMenu (event: MouseEvent, index: number): void {
+        event.preventDefault()
+        event.stopPropagation()
+        const items: MenuItemOptions[] = [
+            {
+                label: this.t('mux.edit.duplicate') + ' - ' + this.t('mux.ge.windowUnit'),
+                click: () => this.duplicateWindow(index),
+            },
+            { type: 'separator' },
+            {
+                label: this.t('mux.edit.remove') + ' - ' + this.t('mux.ge.windowUnit'),
+                click: () => this.removeWindow(index),
+            },
+        ]
+        this.platform.popupContextMenu(items, event)
     }
 
     async importWindow (): Promise<void> {
-        if (!this.editing || !this.importWindowKey) {
+        if (!this.editing) {
             return
         }
-        const win = this.mux.sessions.flatMap(s => s.windows).find(w => w.id === this.importWindowKey)
+        const win = await this.mux.pickSessionWindow()
         if (!win) {
             return
         }
@@ -697,12 +667,14 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
             this.editing.windows.push(spec)
             this.dirty = true
         }
-        this.importWindowKey = ''
     }
 
-    addBlankWindow (): void {
-        const profile = this.profiles.find(p => p.id === this.blankProfileId)
-        if (!profile || !this.editing) {
+    async addBlankWindow (): Promise<void> {
+        if (!this.editing) {
+            return
+        }
+        const profile = await this.mux.pickProfile()
+        if (!profile) {
             return
         }
         this.editing.windows.push({
@@ -735,6 +707,80 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         event.stopPropagation()
         this.selectedPath = [...path]
         this.promoteName = ''
+    }
+
+    /**
+     * Right-click menu on a canvas pane: all structural actions live here,
+     * keeping the panel below the canvas edit-only.
+     */
+    paneContextMenu (event: MouseEvent, path: number[]): void {
+        event.preventDefault()
+        event.stopPropagation()
+        this.selectedPath = [...path]
+        this.promoteName = ''
+        const pane = this.selectedPaneSpec
+        const items: MenuItemOptions[] = [
+            {
+                label: this.t('mux.ge.splitH'),
+                click: () => this.splitSelected('h'),
+            },
+            {
+                label: this.t('mux.ge.splitV'),
+                click: () => this.splitSelected('v'),
+            },
+            {
+                label: this.t('mux.edit.duplicate'),
+                click: () => this.duplicateSelected(),
+            },
+            { type: 'separator' },
+            {
+                label: this.t('mux.edit.remove'),
+                click: () => this.deleteSelected(),
+            },
+            { type: 'separator' },
+            {
+                label: this.t('mux.ge.assignProfile') + '…',
+                click: () => void this.assignProfile(),
+            },
+        ]
+        if (pane?.profileId) {
+            items.push({
+                label: this.t('mux.ge.fork') + '…',
+                click: () => this.forkSelected(),
+            })
+        } else if (pane?.profile) {
+            items.push({
+                label: this.t('mux.ge.promote') + '…',
+                click: () => this.focusPromote(),
+            })
+        }
+        this.platform.popupContextMenu(items, event)
+    }
+
+    /** Assigns a profile to the selected pane as a reference (searchable picker). */
+    async assignProfile (): Promise<void> {
+        const pane = this.selectedPaneSpec
+        if (!pane) {
+            return
+        }
+        const profile = await this.mux.pickProfile()
+        if (!profile) {
+            return
+        }
+        pane.profileId = profile.id ?? null
+        pane.profile = null
+        this.dirty = true
+    }
+
+    /** Scrolls attention to the promote row after picking it from the menu. */
+    private focusPromote (): void {
+        this.promoteName = this.promoteName || (this.selectedPaneSpec?.profile?.name ?? '') + ''
+        // Select the pane so the copy panel with the promote row is visible.
+        this.cdr.detectChanges()
+        setTimeout(() => {
+            const input = document.querySelector('mux-settings input[placeholder]')
+            ;(input as HTMLInputElement | null)?.focus()
+        }, 50)
     }
 
     get selectedLayout (): MuxLayoutContainer | null {
@@ -801,16 +847,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         }
         deleteSpecAt(layout, this.selectedPath)
         this.selectedPath = null
-        this.dirty = true
-    }
-
-    switchReference (profileId: string): void {
-        const pane = this.selectedPaneSpec
-        if (!pane) {
-            return
-        }
-        pane.profileId = profileId || null
-        pane.profile = null
         this.dirty = true
     }
 
