@@ -71,6 +71,7 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - **图形画布**：递归 ng-template（`context: {$implicit, path}`），ratios → `flex-grow`（cell 包一层做 flex item）；结构变异前**先捕获 pane 对象**再 `findPathByPane` 恢复选中（normalizeSpec 会提升容器改变路径）。
 - **提升 Profile**：`ProfilesService.newProfile(profile)`（genId 默认 true，生成 `local:custom:<name>:<uuid>` id）→ pane 转回引用。注意：**没有 removeProfile API**（删除要走 config）。
 - @angular/cdk/drag-drop 作 external 可用（宿主为 tabby-core 保留 CDK）；设置页测试句柄 `window.__muxSettingsComponent`。
+- **编辑器 UI 惯例（2026-10-16 六轮简化）**：窗格/窗口动作全部走右键菜单（`popupContextMenu`），面板只留编辑字段；Profile 指派/空白窗口/导入窗口全部经**可搜索选择器**——`ProfilesService.showProfileSelector()`（宿主原生组件）或 `SelectorService.show()`（自定义选项：导入窗口用 result=MuxWindow）。
 - 删除窗口最后一个窗格必须连带删窗口；startEdit 过滤空窗口自愈旧数据。`PlatformService.showMessageBox`：`{buttons, defaultId, cancelId}` → `result.response` 按钮下标。
 
 ## 常用命令
