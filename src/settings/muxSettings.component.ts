@@ -18,42 +18,18 @@ import {
 } from '../template.model'
 
 /**
- * Settings page for tabby-mux: "Templates" first (profiles-page-style
- * grouped list; click a row to edit in a floating modal), everything else
- * merged into a single "General" tab.
+ * Settings page for tabby-mux, mirroring the native settings conventions:
+ * ngbNav tabs, the templates list styled after the profiles page
+ * (collapse-container with collapsible groups, hover-reveal actions, a
+ * New dropdown), and floating modal editors.
  *
- * The template editor modal shows the window list plus a graphical layout
- * canvas: panes are click-selected, right-clicked for structural actions,
- * and carry a borderless corner edit button that opens the pane's config in
- * its own modal. Saving pane edits stores an independent copy with the
- * template; writing back to the global profile registry is an explicit
- * "Save as profile & connection" action. Divider handles between panes are
- * draggable to adjust ratios.
+ * Structural note: the editor/pane modals use static backdrops, so they
+ * MUST be dismissed when this component goes away (section/tab switch) -
+ * otherwise the leftover overlay blocks every click on the settings page.
  */
 @Component({
     selector: 'mux-settings',
     styles: [`
-        .mux-settings-tabs {
-            display: flex;
-            gap: 2px;
-            border-bottom: 1px solid var(--theme-bg-less, rgba(128, 128, 128, .25));
-            margin-bottom: 14px;
-        }
-        .mux-settings-tab {
-            padding: 6px 14px;
-            border: none;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -1px;
-            background: transparent;
-            color: var(--theme-fg-more, #999);
-            font-size: 13px;
-            cursor: pointer;
-        }
-        .mux-settings-tab:hover { color: var(--theme-fg, #ccc); }
-        .mux-settings-tab.is-active {
-            color: var(--theme-fg, #ccc);
-            border-bottom-color: var(--theme-primary, #0d6efd);
-        }
         .mux-form-line {
             display: flex;
             align-items: center;
@@ -73,46 +49,22 @@ import {
             margin: 18px 0 6px;
         }
         .mux-section-title:first-child { margin-top: 0; }
-        /* ---- profiles-page-style template list ---- */
-        .mux-group-header {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 6px 4px;
-            font-size: 12px;
-            font-weight: 600;
-            color: var(--theme-fg-more, #999);
+        /* collapse list - copied from profilesSettingsTab.component.scss
+           (native classes are scoped to their components) */
+        .mux-collapse-container {
+            background-color: var(--theme-bg-less);
+            border-radius: 0.375rem;
         }
-        .mux-tpl-entry {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 7px 10px;
-            margin: 2px 0;
-            border-radius: 6px;
+        .mux-collapse-item {
+            height: 2.25rem;
+            background-color: var(--theme-bg-less);
+            border-radius: 0.3rem;
             cursor: pointer;
         }
-        .mux-tpl-entry:hover { background: var(--theme-bg-less, rgba(128, 128, 128, .18)); }
-        .mux-tpl-entry .mux-entry-icon { color: var(--theme-fg-more, #999); }
-        .mux-tpl-entry .mux-entry-text { flex: 1; min-width: 0; }
-        .mux-tpl-entry .mux-entry-name { font-size: 13px; }
-        .mux-tpl-entry .mux-entry-meta {
-            font-size: 11px;
-            color: var(--theme-fg-more, #999);
-        }
-        .mux-icon-btn {
-            border: none;
-            background: transparent;
-            color: var(--theme-fg-more, #999);
-            padding: 4px 7px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-        }
-        .mux-icon-btn:hover {
-            background: var(--theme-bg-less, rgba(128, 128, 128, .3));
-            color: var(--theme-fg, #ccc);
-        }
+        .mux-collapse-item:hover { background-color: var(--theme-bg-less-2); }
+        .mux-hover-reveal { visibility: hidden; }
+        .mux-collapse-item:hover .mux-hover-reveal, .mux-hover-reveal.show { visibility: visible; }
+        .no-wrap { white-space: nowrap; }
         .mux-tpl-empty {
             padding: 16px 0;
             font-size: 13px;
@@ -131,6 +83,18 @@ import {
             font-size: 12px;
         }
         .mux-btn-sq { padding: 2px 8px; }
+        .mux-tpl-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding: 8px 10px;
+            margin: 4px 0;
+            border-radius: 5px;
+            background: var(--theme-bg-more, rgba(128, 128, 128, .12));
+        }
+        .mux-tpl-row .mux-tpl-name { font-size: 13px; font-weight: 600; }
+        .mux-tpl-row .mux-tpl-meta { font-size: 12px; color: var(--theme-fg-more, #999); }
         /* ---- graphical layout canvas ---- */
         .mux-canvas {
             flex-basis: 100%;
@@ -236,164 +200,210 @@ import {
     template: `
         <h3 class="mb-3">Tabby Mux</h3>
 
-        <div class="mux-settings-tabs" role="tablist">
-            <button type="button" role="tab" class="mux-settings-tab"
-                    [class.is-active]="tab === 'templates'"
-                    (click)="tab = 'templates'">{{ t('mux.settings.tabTemplates') }}</button>
-            <button type="button" role="tab" class="mux-settings-tab"
-                    [class.is-active]="tab === 'general'"
-                    (click)="tab = 'general'">{{ t('mux.settings.tabGeneral') }}</button>
-        </div>
-
-        <!-- ==================== templates tab ==================== -->
-        <ng-container *ngIf="tab === 'templates'">
-            <div class="mb-2 d-flex">
-                <button type="button" class="btn btn-primary btn-sm"
-                        [disabled]="!mux.sessions.length"
-                        (click)="saveTemplate()">
-                    <i class="fas fa-bookmark me-1"></i>{{ t('mux.settings.tplSave') }}
-                </button>
-            </div>
-            <div *ngIf="!templates.length" class="mux-tpl-empty">{{ t('mux.settings.tplEmpty') }}</div>
-            <ng-container *ngFor="let grp of templateGroups">
-                <div class="mux-group-header">
-                    <i class="fas fa-folder"></i>{{ grp.name }}
-                </div>
-                <div *ngFor="let tpl of grp.templates" class="mux-tpl-entry" (click)="openEditor(tpl)">
-                    <i class="fas fa-layer-group mux-entry-icon"></i>
-                    <div class="mux-entry-text">
-                        <div class="mux-entry-name">{{ tpl.name }}</div>
-                        <div class="mux-entry-meta">
-                            {{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }} · {{ tpl.createdAt | date:'short' }}
+        <ul ngbNav #nav="ngbNav" class="nav-tabs" [destroyOnHide]="false">
+            <li ngbNavItem>
+                <a ngbNavLink>{{ t('mux.settings.tabTemplates') }}</a>
+                <ng-template ngbNavContent>
+                    <div class="d-flex mb-3">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="fas fa-fw fa-search"></i></span>
+                            <input type="search" class="form-control"
+                                   [placeholder]="t('mux.settings.filter')" [(ngModel)]="filter">
+                        </div>
+                        <div ngbDropdown class="d-inline-block flex-shrink-0 ms-3">
+                            <button type="button" class="btn btn-primary" ngbDropdownToggle>
+                                <i class="fas fa-fw fa-plus"></i>{{ t('mux.new') }}
+                            </button>
+                            <div ngbDropdownMenu>
+                                <button ngbDropdownItem (click)="newTemplate()">
+                                    <i class="fas fa-fw fa-plus"></i>{{ t('mux.newTemplate') }}
+                                </button>
+                                <button ngbDropdownItem (click)="newTemplateGroup()">
+                                    <i class="fas fa-fw fa-plus"></i>{{ t('mux.newGroup') }}
+                                </button>
+                            </div>
                         </div>
                     </div>
-                    <button type="button" class="mux-icon-btn"
-                            [title]="t('mux.tmpl.apply')"
-                            (click)="applyTemplate(tpl); $event.stopPropagation()">
-                        <i class="fas fa-play"></i>
-                    </button>
-                    <button type="button" class="mux-icon-btn"
-                            (click)="entryMenu($event, tpl); $event.stopPropagation()">
-                        <i class="fas fa-ellipsis-h"></i>
-                    </button>
-                </div>
-            </ng-container>
-        </ng-container>
 
-        <!-- ==================== general tab ==================== -->
-        <ng-container *ngIf="tab === 'general'">
-            <div class="mux-section-title">{{ t('mux.settings.sectionStatusbar') }}</div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-sb-enabled"
-                               [(ngModel)]="settings.statusBar.enabled" (ngModelChange)="save()">
+                    <div class="d-flex flex-column my-3 p-2 mux-collapse-container">
+                        <ng-container *ngFor="let grp of templateGroups">
+                            <div class="mux-collapse-item d-flex align-items-center p-1"
+                                 (click)="toggleGroupCollapse(grp.name)">
+                                <i class="fa fa-fw far" [class.fa-folder]="grp.collapsed"
+                                   [class.fa-folder-open]="!grp.collapsed"></i>
+                                <span class="ms-3 me-auto no-wrap">{{ grp.display }}</span>
+                                <button type="button" class="btn btn-sm btn-link mux-hover-reveal ms-2"
+                                        *ngIf="grp.name"
+                                        (click)="$event.stopPropagation(); renameGroup(grp.name)">
+                                    <i class="fas fa-pencil-alt"></i>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-link mux-hover-reveal ms-2 text-danger"
+                                        *ngIf="grp.name"
+                                        (click)="$event.stopPropagation(); deleteGroup(grp.name)">
+                                    <i class="fas fa-trash-alt"></i>
+                                </button>
+                            </div>
+                            <ng-container *ngIf="!grp.collapsed">
+                                <div *ngFor="let tpl of filteredTemplates(grp.templates)"
+                                     class="mux-collapse-item d-flex align-items-center p-1 ps-4"
+                                     (click)="openEditor(tpl)">
+                                    <i class="fas fa-fw fa-layer-group ms-1"></i>
+                                    <span class="ms-3 no-wrap">{{ tpl.name }}</span>
+                                    <span class="text-muted no-wrap ms-2">
+                                        {{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }}
+                                    </span>
+                                    <div class="me-auto"></div>
+                                    <button type="button" class="btn btn-link mux-hover-reveal ms-1"
+                                            (click)="$event.stopPropagation(); applyTemplate(tpl)">
+                                        <i class="fas fa-play"></i>
+                                    </button>
+                                    <div ngbDropdown placement="bottom-right top-right auto" class="ms-1 mux-hover-reveal">
+                                        <button type="button" class="btn btn-link ms-1" ngbDropdownToggle
+                                                (click)="$event.stopPropagation()">
+                                            <i class="fas fa-fw fa-ellipsis-vertical"></i>
+                                        </button>
+                                        <div ngbDropdownMenu>
+                                            <button ngbDropdownItem
+                                                    (click)="$event.stopPropagation(); renameTemplate(tpl)">
+                                                <i class="fas fa-fw fa-pencil-alt"></i>{{ t('mux.settings.menuRename') }}
+                                            </button>
+                                            <button ngbDropdownItem
+                                                    (click)="$event.stopPropagation(); setTemplateGroup(tpl)">
+                                                <i class="fas fa-fw fa-folder"></i>{{ t('mux.settings.menuSetGroup') }}
+                                            </button>
+                                            <button ngbDropdownItem
+                                                    (click)="$event.stopPropagation(); deleteTemplate(tpl)">
+                                                <i class="fas fa-fw fa-trash-alt"></i>{{ t('mux.settings.menuDelete') }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </ng-container>
+                        </ng-container>
+                        <div *ngIf="!templateGroups.length" class="mux-tpl-empty">
+                            {{ t('mux.settings.tplEmpty') }}
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbPaneInfo') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-sb-pane"
-                               [(ngModel)]="settings.statusBar.showPaneInfo" (ngModelChange)="save()">
+                </ng-template>
+            </li>
+            <li ngbNavItem>
+                <a ngbNavLink>{{ t('mux.settings.tabGeneral') }}</a>
+                <ng-template ngbNavContent>
+                    <div class="mux-section-title">{{ t('mux.settings.sectionStatusbar') }}</div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-sb-enabled"
+                                       [(ngModel)]="settings.statusBar.enabled" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbCpu') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-sb-cpu"
-                               [(ngModel)]="settings.statusBar.showCpu" (ngModelChange)="save()">
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbPaneInfo') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-sb-pane"
+                                       [(ngModel)]="settings.statusBar.showPaneInfo" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbMem') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-sb-mem"
-                               [(ngModel)]="settings.statusBar.showMem" (ngModelChange)="save()">
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbCpu') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-sb-cpu"
+                                       [(ngModel)]="settings.statusBar.showCpu" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbHeight') }}</div></div>
-                <div class="mux-line-control">
-                    <input type="number" class="form-control" id="mux-sb-height" min="14" max="80"
-                           [(ngModel)]="settings.statusBar.height" (ngModelChange)="save()">
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbInterval') }}</div></div>
-                <div class="mux-line-control">
-                    <input type="number" class="form-control" id="mux-sb-interval" min="500" step="100"
-                           [(ngModel)]="settings.statusBar.resourceIntervalMs" (ngModelChange)="save()">
-                </div>
-            </div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbMem') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-sb-mem"
+                                       [(ngModel)]="settings.statusBar.showMem" (ngModelChange)="save()">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbHeight') }}</div></div>
+                        <div class="mux-line-control">
+                            <input type="number" class="form-control" id="mux-sb-height" min="14" max="80"
+                                   [(ngModel)]="settings.statusBar.height" (ngModelChange)="save()">
+                        </div>
+                    </div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbInterval') }}</div></div>
+                        <div class="mux-line-control">
+                            <input type="number" class="form-control" id="mux-sb-interval" min="500" step="100"
+                                   [(ngModel)]="settings.statusBar.resourceIntervalMs" (ngModelChange)="save()">
+                        </div>
+                    </div>
 
-            <div class="mux-section-title">{{ t('mux.settings.sectionSidebar') }}</div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-rail-enabled"
-                               [(ngModel)]="settings.sidebar.enabled" (ngModelChange)="save()">
+                    <div class="mux-section-title">{{ t('mux.settings.sectionSidebar') }}</div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-rail-enabled"
+                                       [(ngModel)]="settings.sidebar.enabled" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.railWidth') }}</div></div>
-                <div class="mux-line-control">
-                    <input type="number" class="form-control" id="mux-rail-width" min="80" max="400"
-                           [(ngModel)]="settings.sidebar.width" (ngModelChange)="save()">
-                </div>
-            </div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railWidth') }}</div></div>
+                        <div class="mux-line-control">
+                            <input type="number" class="form-control" id="mux-rail-width" min="80" max="400"
+                                   [(ngModel)]="settings.sidebar.width" (ngModelChange)="save()">
+                        </div>
+                    </div>
 
-            <div class="mux-section-title">{{ t('mux.settings.sectionSessions') }}</div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-isolated"
-                               [(ngModel)]="settings.isolatedSessions" (ngModelChange)="save()">
+                    <div class="mux-section-title">{{ t('mux.settings.sectionSessions') }}</div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-isolated"
+                                       [(ngModel)]="settings.isolatedSessions" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.autoAdopt') }}</div></div>
-                <div class="mux-line-control">
-                    <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="mux-adopt"
-                               [(ngModel)]="settings.autoAdoptWindows" (ngModelChange)="save()">
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.autoAdopt') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-adopt"
+                                       [(ngModel)]="settings.autoAdoptWindows" (ngModelChange)="save()">
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.defaultName') }}</div></div>
-                <div class="mux-line-control">
-                    <input type="text" class="form-control" id="mux-default-name" maxlength="40"
-                           [ngModel]="settings.defaultSessionName ?? ''"
-                           (ngModelChange)="settings.defaultSessionName = $event || null; save()">
-                </div>
-            </div>
-            <div class="mux-form-line">
-                <div class="mux-line-header"><div class="title">{{ t('mux.settings.profile') }}</div></div>
-                <div class="mux-line-control">
-                    <select class="form-select" id="mux-profile"
-                            [ngModel]="settings.newWindowProfile ?? ''"
-                            (ngModelChange)="settings.newWindowProfile = $event || null; save()">
-                        <option value="">{{ t('mux.settings.profileAuto') }}</option>
-                        <option *ngFor="let p of profiles" [ngValue]="p.id">{{ p.name }} ({{ p.type }})</option>
-                    </select>
-                </div>
-            </div>
-        </ng-container>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.defaultName') }}</div></div>
+                        <div class="mux-line-control">
+                            <input type="text" class="form-control" id="mux-default-name" maxlength="40"
+                                   [ngModel]="settings.defaultSessionName ?? ''"
+                                   (ngModelChange)="settings.defaultSessionName = $event || null; save()">
+                        </div>
+                    </div>
+                    <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.profile') }}</div></div>
+                        <div class="mux-line-control">
+                            <select class="form-select" id="mux-profile"
+                                    [ngModel]="settings.newWindowProfile ?? ''"
+                                    (ngModelChange)="settings.newWindowProfile = $event || null; save()">
+                                <option value="">{{ t('mux.settings.profileAuto') }}</option>
+                                <option *ngFor="let p of profiles" [ngValue]="p.id">{{ p.name }} ({{ p.type }})</option>
+                            </select>
+                        </div>
+                    </div>
+                </ng-template>
+            </li>
+        </ul>
+        <div [ngbNavOutlet]="nav" class="mt-2"></div>
 
         <!-- ==================== template editor modal ==================== -->
-        <ng-template #editorTpl let-modal>
+        <ng-template #editorTpl>
             <div class="modal-header">
                 <h5 class="modal-title">
                     <i class="fas fa-layer-group me-2"></i>
@@ -466,7 +476,7 @@ import {
         </ng-template>
 
         <!-- ==================== pane config modal ==================== -->
-        <ng-template #paneTpl let-modal>
+        <ng-template #paneTpl>
             <div class="modal-header">
                 <h5 class="modal-title"><i class="fas fa-terminal me-2"></i>{{ t('mux.paneModal.title') }}</h5>
                 <button type="button" class="btn-close" (click)="paneModalRef?.dismiss()"></button>
@@ -539,9 +549,9 @@ import {
     `,
 })
 export class MuxSettingsComponent implements OnInit, OnDestroy {
-    tab = 'templates'
     settings: any
     profiles: any[] = []
+    filter = ''
     private changedSub: Subscription | null = null
 
     // ---- template editor state ----
@@ -578,33 +588,57 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
 
     ngOnDestroy (): void {
         this.changedSub?.unsubscribe()
+        // Static backdrops: an open modal must never outlive this component,
+        // or its overlay blocks every click on the settings page.
+        this.paneModalRef?.dismiss()
+        this.editorModalRef?.dismiss()
     }
 
     get templates (): MuxSessionTemplate[] {
         return this.mux.templates
     }
 
-    /** Profiles-page-style grouping: named groups sorted, ungrouped last. */
-    get templateGroups (): { name: string, templates: MuxSessionTemplate[] }[] {
+    /**
+     * Profiles-page-style grouping: explicit groups (may be empty) plus
+     * implicit groups from template.group, sorted; ungrouped last.
+     */
+    get templateGroups (): { name: string, display: string, templates: MuxSessionTemplate[], collapsed: boolean }[] {
         const groups = new Map<string, MuxSessionTemplate[]>()
+        for (const name of this.settings.templateGroups ?? []) {
+            groups.set(name, [])
+        }
         for (const tpl of this.templates) {
             const key = (tpl.group ?? '').trim()
             const list = groups.get(key) ?? []
             list.push(tpl)
             groups.set(key, list)
         }
-        const out: { name: string, templates: MuxSessionTemplate[] }[] = []
-        for (const key of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
-            if (key === '') {
+        const collapsed = new Set(this.settings.collapsedGroups ?? [])
+        const out: { name: string, display: string, templates: MuxSessionTemplate[], collapsed: boolean }[] = []
+        for (const name of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+            if (name === '') {
                 continue
             }
-            out.push({ name: key, templates: groups.get(key)! })
+            out.push({ name, display: name, templates: groups.get(name)!, collapsed: collapsed.has(name) })
         }
         const ungrouped = groups.get('')
         if (ungrouped?.length) {
-            out.push({ name: this.t('mux.settings.tplGroupUngrouped'), templates: ungrouped })
+            out.push({
+                name: '',
+                display: this.t('mux.settings.tplGroupUngrouped'),
+                templates: ungrouped,
+                collapsed: collapsed.has(''),
+            })
         }
         return out
+    }
+
+    filteredTemplates (list: MuxSessionTemplate[]): MuxSessionTemplate[] {
+        const needle = this.filter.trim().toLowerCase()
+        if (!needle) {
+            return list
+        }
+        return list.filter(tpl => tpl.name.toLowerCase().includes(needle))
     }
 
     t (key: string, params?: Record<string, any>): string {
@@ -627,46 +661,98 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         void this.mux.deleteTemplate(tpl)
     }
 
-    /** Kebab menu of a template list entry. */
-    entryMenu (event: MouseEvent, tpl: MuxSessionTemplate): void {
-        const items: MenuItemOptions[] = [
-            {
-                label: this.t('mux.settings.menuEdit'),
-                click: () => this.openEditor(tpl),
-            },
-            {
-                label: this.t('mux.settings.menuRename'),
-                click: () => void this.renameTemplate(tpl),
-            },
-            {
-                label: this.t('mux.settings.menuSetGroup'),
-                click: () => void this.setTemplateGroup(tpl),
-            },
-            { type: 'separator' },
-            {
-                label: this.t('mux.settings.menuDelete'),
-                click: () => void this.mux.deleteTemplate(tpl),
-            },
-        ]
-        this.platform.popupContextMenu(items, event)
+    // ---- group management ----
+
+    private persistGroups (groups: string[]): void {
+        this.config.store[CONFIG_KEY].templateGroups = groups
+        void this.config.save()
     }
 
-    private async renameTemplate (tpl: MuxSessionTemplate): Promise<void> {
+    toggleGroupCollapse (name: string): void {
+        const current: string[] = [...(this.settings.collapsedGroups ?? [])]
+        const index = current.indexOf(name)
+        if (index === -1) {
+            current.push(name)
+        } else {
+            current.splice(index, 1)
+        }
+        this.config.store[CONFIG_KEY].collapsedGroups = current
+        void this.config.save()
+    }
+
+    async newTemplateGroup (): Promise<void> {
+        const name = await this.mux.promptForText('mux.settings.tplGroupPrompt', '')
+        if (name === null || !name.trim()) {
+            return
+        }
+        const groups: string[] = this.settings.templateGroups ?? []
+        if (!groups.includes(name.trim())) {
+            this.persistGroups([...groups, name.trim()])
+        }
+    }
+
+    async renameGroup (name: string): Promise<void> {
+        const next = await this.mux.promptForText('mux.settings.tplGroupPrompt', name)
+        if (next === null || !next.trim() || next.trim() === name) {
+            return
+        }
+        const groups: string[] = this.settings.templateGroups ?? []
+        this.persistGroups(groups.map(g => g === name ? next.trim() : g))
+        for (const tpl of this.templates.filter(t => (t.group ?? '') === name)) {
+            await this.mux.saveTemplateEdit({ ...tpl, group: next.trim() } as any)
+        }
+    }
+
+    async deleteGroup (name: string): Promise<void> {
+        const groups: string[] = this.settings.templateGroups ?? []
+        this.persistGroups(groups.filter(g => g !== name))
+        for (const tpl of this.templates.filter(t => (t.group ?? '') === name)) {
+            await this.mux.saveTemplateEdit({ ...tpl, group: '' } as any)
+        }
+    }
+
+    // ---- template list actions ----
+
+    async newTemplate (): Promise<void> {
+        const groups: string[] = this.settings.templateGroups ?? []
+        const tpl: MuxSessionTemplate = {
+            id: `tpl-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+            name: this.uniqueTemplateName(this.t('mux.newTemplate')),
+            group: groups[0] ?? '',
+            createdAt: Date.now(),
+            windows: [],
+        }
+        this.config.store[CONFIG_KEY].templates = [...this.templates, tpl]
+        await this.config.save()
+        this.openEditor(tpl)
+    }
+
+    private uniqueTemplateName (base: string): string {
+        const names = new Set(this.templates.map(t => t.name))
+        if (!names.has(base)) {
+            return base
+        }
+        let n = 2
+        while (names.has(`${base} ${n}`)) {
+            n++
+        }
+        return `${base} ${n}`
+    }
+
+    async renameTemplate (tpl: MuxSessionTemplate): Promise<void> {
         const name = await this.mux.promptForText('mux.windowPrompt', tpl.name)
         if (name === null) {
             return
         }
-        const edited = { ...tpl, name: name.trim() || tpl.name }
-        await this.mux.saveTemplateEdit(edited as any)
+        await this.mux.saveTemplateEdit({ ...tpl, name: name.trim() || tpl.name } as any)
     }
 
-    private async setTemplateGroup (tpl: MuxSessionTemplate): Promise<void> {
+    async setTemplateGroup (tpl: MuxSessionTemplate): Promise<void> {
         const group = await this.mux.promptForText('mux.settings.tplGroupPrompt', tpl.group ?? '')
         if (group === null) {
             return
         }
-        const edited = { ...tpl, group: group.trim() }
-        await this.mux.saveTemplateEdit(edited as any)
+        await this.mux.saveTemplateEdit({ ...tpl, group: group.trim() } as any)
     }
 
     // ==================================================================
@@ -674,6 +760,9 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     // ==================================================================
 
     openEditor (tpl: MuxSessionTemplate): void {
+        if (this.editorModalRef) {
+            this.editorModalRef.dismiss()
+        }
         this.startEdit(tpl)
         this.editorModalRef = this.ngb.open(this.editorTpl!, {
             size: 'xl',

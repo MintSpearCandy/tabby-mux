@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common'
 import { NgModule } from '@angular/core'
 import { FormsModule } from '@angular/forms'
 import { DragDropModule } from '@angular/cdk/drag-drop'
+import { NgbDropdownModule, NgbNavModule } from '@ng-bootstrap/ng-bootstrap'
 import TabbyCoreModule, {
     CommandProvider,
     ConfigProvider,
@@ -17,7 +18,7 @@ import { MuxSettingsComponent } from './settings/muxSettings.component'
 import { MuxSettingsTabProvider } from './settings/settingsTabProvider'
 
 @NgModule({
-    imports: [CommonModule, FormsModule, DragDropModule, TabbyCoreModule],
+    imports: [CommonModule, FormsModule, DragDropModule, NgbNavModule, NgbDropdownModule, TabbyCoreModule],
     // useClass everywhere: useExisting on provider tokens throws
     // NullInjectorError during bootstrap and takes every user plugin down.
     providers: [

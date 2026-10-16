@@ -105,6 +105,10 @@ export interface MuxSettings {
     sidebar: MuxSidebarConfig
     /** Saved session templates (whole-array assignment persists, see MuxService). */
     templates: MuxSessionTemplate[]
+    /** Explicitly created template groups (may be empty of templates). */
+    templateGroups: string[]
+    /** Group names whose list sections are collapsed. */
+    collapsedGroups: string[]
     /** Adopt top-level terminal tabs opened outside the plugin into the active session. */
     autoAdoptWindows: boolean
     /** Name for auto-created sessions; null = sequential numbers like tmux (0, 1, 2...). */
@@ -131,6 +135,8 @@ export function defaultMuxSettings (): MuxSettings {
         },
         sidebar: { enabled: true, width: 150 },
         templates: [],
+        templateGroups: [],
+        collapsedGroups: [],
         autoAdoptWindows: true,
         defaultSessionName: null,
         newWindowProfile: null,
