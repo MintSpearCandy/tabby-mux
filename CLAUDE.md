@@ -72,6 +72,7 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - **提升 Profile**：`ProfilesService.newProfile(profile)`（genId 默认 true，生成 `local:custom:<name>:<uuid>` id）→ pane 转回引用。注意：**没有 removeProfile API**（删除要走 config）。
 - @angular/cdk/drag-drop 作 external 可用（宿主为 tabby-core 保留 CDK）；设置页测试句柄 `window.__muxSettingsComponent`。
 - **编辑器 UI 惯例（2026-10-16 六轮简化）**：窗格/窗口动作全部走右键菜单（`popupContextMenu`），面板只留编辑字段；Profile 指派/空白窗口/导入窗口全部经**可搜索选择器**——`ProfilesService.showProfileSelector()`（宿主原生组件）或 `SelectorService.show()`（自定义选项：导入窗口用 result=MuxWindow）。
+- **设置页原生化 + modal 泄漏（2026-10-17）**：`backdrop:'static'` 的 NgbModal **必须在组件 ngOnDestroy 里 dismiss**——否则切设置分区/关设置页后遮罩残留、整个页面点击无响应（用户报"按键无响应"的根因）。页签用 **ngbNav**（模块 import NgbNavModule/NgbDropdownModule）；模板列表复制 profilesSettingsTab 的 `collapse-container/collapse-item` 结构与样式（原生类 scoped 不可直接用，需自拷贝 CSS；`hover-reveal` 也非全局类）。分组存 `mux.templateGroups/collapsedGroups`（数组，整组赋值）。
 - 删除窗口最后一个窗格必须连带删窗口；startEdit 过滤空窗口自愈旧数据。`PlatformService.showMessageBox`：`{buttons, defaultId, cancelId}` → `result.response` 按钮下标。
 
 ## 常用命令
