@@ -816,6 +816,11 @@ export class MuxService {
         return await selector.show<MuxWindow>(this.i18n.t('mux.edit.importWindow'), options)
     }
 
+    /** Public text-prompt wrapper for list-level template operations. */
+    async promptForText (key: string, current: string): Promise<string | null> {
+        return await this.promptText(key, current)
+    }
+
     /** Right-click menu for a session (rail entries, status bar chips). */
     sessionContextMenu (session: MuxSession, event: MouseEvent): void {
         const items: MenuItemOptions[] = [

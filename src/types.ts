@@ -94,6 +94,8 @@ export interface MuxWindowSpec {
 export interface MuxSessionTemplate {
     id: string
     name: string
+    /** Optional group heading, mirroring the profiles page's grouping. */
+    group?: string
     createdAt: number
     windows: MuxWindowSpec[]
 }

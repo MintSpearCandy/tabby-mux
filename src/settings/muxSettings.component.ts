@@ -1,6 +1,7 @@
 import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop'
-import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core'
+import { ChangeDetectorRef, Component, OnDestroy, OnInit, TemplateRef, ViewChild } from '@angular/core'
 import { ConfigService, MenuItemOptions, PlatformService, ProfilesService } from 'tabby-core'
+import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { Subscription } from 'rxjs'
 import { I18n } from '../i18n'
 import { CONFIG_KEY } from '../configKeys'
@@ -10,7 +11,6 @@ import {
     deepClone,
     deleteSpecAt,
     duplicateSpecAt,
-    nodeAtPath,
     specPaneAt,
     specPanes,
     specSummary,
@@ -18,16 +18,17 @@ import {
 } from '../template.model'
 
 /**
- * Settings page for tabby-mux, organized in tabs. Row structure mirrors the
- * native settings pages, with self-contained styling.
+ * Settings page for tabby-mux: "Templates" first (profiles-page-style
+ * grouped list; click a row to edit in a floating modal), everything else
+ * merged into a single "General" tab.
  *
- * The templates tab has two modes: the list, and an in-place editor working
- * on a deep-cloned copy of one template. Each window is edited through a
- * graphical layout canvas (nested flex rendering with real ratios - what
- * you see is the actual layout); panes are selected by click and can be
- * split/duplicated/deleted, their profile switched as a live reference, or
- * forked into an embedded editable copy which can be promoted back into a
- * new Tabby profile.
+ * The template editor modal shows the window list plus a graphical layout
+ * canvas: panes are click-selected, right-clicked for structural actions,
+ * and carry a borderless corner edit button that opens the pane's config in
+ * its own modal. Saving pane edits stores an independent copy with the
+ * template; writing back to the global profile registry is an explicit
+ * "Save as profile & connection" action. Divider handles between panes are
+ * draggable to adjust ratios.
  */
 @Component({
     selector: 'mux-settings',
@@ -61,32 +62,63 @@ import {
         }
         .mux-form-line .mux-line-header { flex: 1; min-width: 0; }
         .mux-form-line .mux-line-header .title { font-size: 13px; }
-        .mux-form-line .mux-line-header .description {
-            font-size: 12px;
-            color: var(--theme-fg-more, #999);
-        }
         .mux-form-line .mux-line-control { width: 220px; flex-shrink: 0; }
         .mux-form-line .form-check { margin: 0; }
-        .mux-tpl-row {
+        .mux-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .5px;
+            color: var(--theme-fg-more, #999);
+            margin: 18px 0 6px;
+        }
+        .mux-section-title:first-child { margin-top: 0; }
+        /* ---- profiles-page-style template list ---- */
+        .mux-group-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 6px 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--theme-fg-more, #999);
+        }
+        .mux-tpl-entry {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
-            padding: 8px 10px;
-            margin: 4px 0;
-            border-radius: 5px;
-            background: var(--theme-bg-more, rgba(128, 128, 128, .12));
+            padding: 7px 10px;
+            margin: 2px 0;
+            border-radius: 6px;
+            cursor: pointer;
         }
-        .mux-tpl-row .mux-tpl-name { font-size: 13px; font-weight: 600; }
-        .mux-tpl-row .mux-tpl-meta {
-            font-size: 12px;
+        .mux-tpl-entry:hover { background: var(--theme-bg-less, rgba(128, 128, 128, .18)); }
+        .mux-tpl-entry .mux-entry-icon { color: var(--theme-fg-more, #999); }
+        .mux-tpl-entry .mux-entry-text { flex: 1; min-width: 0; }
+        .mux-tpl-entry .mux-entry-name { font-size: 13px; }
+        .mux-tpl-entry .mux-entry-meta {
+            font-size: 11px;
             color: var(--theme-fg-more, #999);
+        }
+        .mux-icon-btn {
+            border: none;
+            background: transparent;
+            color: var(--theme-fg-more, #999);
+            padding: 4px 7px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .mux-icon-btn:hover {
+            background: var(--theme-bg-less, rgba(128, 128, 128, .3));
+            color: var(--theme-fg, #ccc);
         }
         .mux-tpl-empty {
             padding: 16px 0;
             font-size: 13px;
             color: var(--theme-fg-more, #999);
         }
+        /* ---- editor modal ---- */
         .mux-drag-handle {
             cursor: grab;
             color: var(--theme-fg-more-2, #666);
@@ -102,7 +134,7 @@ import {
         /* ---- graphical layout canvas ---- */
         .mux-canvas {
             flex-basis: 100%;
-            height: 220px;
+            height: 240px;
             display: flex;
             margin-top: 6px;
             padding: 4px;
@@ -110,11 +142,28 @@ import {
             border-radius: 6px;
             background: var(--theme-bg, #1e1e1e);
         }
-        .mux-node { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; gap: 3px; }
+        .mux-node { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; }
         .mux-node.mux-h { flex-direction: row; }
         .mux-node.mux-v { flex-direction: column; }
         .mux-cell { display: flex; flex-basis: 0; min-width: 0; min-height: 0; }
+        .mux-divider { flex: 0 0 6px; z-index: 5; }
+        .mux-node.mux-h > .mux-divider { cursor: col-resize; }
+        .mux-node.mux-v > .mux-divider { cursor: row-resize; }
+        .mux-divider::after {
+            content: '';
+            display: block;
+            width: 2px;
+            height: 100%;
+            margin: 0 auto;
+            border-radius: 2px;
+            background: var(--theme-bg-less, rgba(128, 128, 128, .3));
+        }
+        .mux-node.mux-v > .mux-divider::after { width: 100%; height: 2px; margin: auto 0; }
+        .mux-divider:hover::after, .mux-divider.dragging::after {
+            background: var(--theme-primary, #0d6efd);
+        }
         .mux-gpane {
+            position: relative;
             flex: 1;
             display: flex;
             flex-direction: column;
@@ -150,14 +199,30 @@ import {
             color: var(--theme-fg-more, #999);
         }
         .mux-badge.copy { background: var(--theme-warning, #f0ad4e); color: #000; }
-        .mux-sel-panel {
+        .mux-pane-edit {
+            position: absolute;
+            right: 3px;
+            bottom: 3px;
+            border: none;
+            background: transparent;
+            color: var(--theme-fg-more, #999);
+            padding: 2px 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            opacity: 0;
+        }
+        .mux-gpane:hover .mux-pane-edit, .mux-gpane.selected .mux-pane-edit { opacity: .85; }
+        .mux-pane-edit:hover { color: var(--theme-fg, #ccc); background: var(--theme-bg-less, rgba(128,128,128,.35)); }
+        .mux-sel-bar {
             flex-basis: 100%;
-            border-top: 1px dashed var(--theme-bg-less, rgba(128, 128, 128, .25));
             margin-top: 6px;
-            padding-top: 8px;
+            font-size: 12px;
+            color: var(--theme-fg-more, #999);
             display: flex;
-            flex-direction: column;
+            align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
         .mux-inline-field {
             display: flex;
@@ -173,20 +238,51 @@ import {
 
         <div class="mux-settings-tabs" role="tablist">
             <button type="button" role="tab" class="mux-settings-tab"
-                    [class.is-active]="tab === 'statusbar'"
-                    (click)="tab = 'statusbar'">{{ t('mux.settings.tabStatusbar') }}</button>
-            <button type="button" role="tab" class="mux-settings-tab"
-                    [class.is-active]="tab === 'sidebar'"
-                    (click)="tab = 'sidebar'">{{ t('mux.settings.tabSidebar') }}</button>
-            <button type="button" role="tab" class="mux-settings-tab"
-                    [class.is-active]="tab === 'sessions'"
-                    (click)="tab = 'sessions'">{{ t('mux.settings.tabSessions') }}</button>
-            <button type="button" role="tab" class="mux-settings-tab"
                     [class.is-active]="tab === 'templates'"
                     (click)="tab = 'templates'">{{ t('mux.settings.tabTemplates') }}</button>
+            <button type="button" role="tab" class="mux-settings-tab"
+                    [class.is-active]="tab === 'general'"
+                    (click)="tab = 'general'">{{ t('mux.settings.tabGeneral') }}</button>
         </div>
 
-        <ng-container *ngIf="tab === 'statusbar'">
+        <!-- ==================== templates tab ==================== -->
+        <ng-container *ngIf="tab === 'templates'">
+            <div class="mb-2 d-flex">
+                <button type="button" class="btn btn-primary btn-sm"
+                        [disabled]="!mux.sessions.length"
+                        (click)="saveTemplate()">
+                    <i class="fas fa-bookmark me-1"></i>{{ t('mux.settings.tplSave') }}
+                </button>
+            </div>
+            <div *ngIf="!templates.length" class="mux-tpl-empty">{{ t('mux.settings.tplEmpty') }}</div>
+            <ng-container *ngFor="let grp of templateGroups">
+                <div class="mux-group-header">
+                    <i class="fas fa-folder"></i>{{ grp.name }}
+                </div>
+                <div *ngFor="let tpl of grp.templates" class="mux-tpl-entry" (click)="openEditor(tpl)">
+                    <i class="fas fa-layer-group mux-entry-icon"></i>
+                    <div class="mux-entry-text">
+                        <div class="mux-entry-name">{{ tpl.name }}</div>
+                        <div class="mux-entry-meta">
+                            {{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }} · {{ tpl.createdAt | date:'short' }}
+                        </div>
+                    </div>
+                    <button type="button" class="mux-icon-btn"
+                            [title]="t('mux.tmpl.apply')"
+                            (click)="applyTemplate(tpl); $event.stopPropagation()">
+                        <i class="fas fa-play"></i>
+                    </button>
+                    <button type="button" class="mux-icon-btn"
+                            (click)="entryMenu($event, tpl); $event.stopPropagation()">
+                        <i class="fas fa-ellipsis-h"></i>
+                    </button>
+                </div>
+            </ng-container>
+        </ng-container>
+
+        <!-- ==================== general tab ==================== -->
+        <ng-container *ngIf="tab === 'general'">
+            <div class="mux-section-title">{{ t('mux.settings.sectionStatusbar') }}</div>
             <div class="mux-form-line">
                 <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div></div>
                 <div class="mux-line-control">
@@ -237,9 +333,8 @@ import {
                            [(ngModel)]="settings.statusBar.resourceIntervalMs" (ngModelChange)="save()">
                 </div>
             </div>
-        </ng-container>
 
-        <ng-container *ngIf="tab === 'sidebar'">
+            <div class="mux-section-title">{{ t('mux.settings.sectionSidebar') }}</div>
             <div class="mux-form-line">
                 <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div></div>
                 <div class="mux-line-control">
@@ -256,9 +351,8 @@ import {
                            [(ngModel)]="settings.sidebar.width" (ngModelChange)="save()">
                 </div>
             </div>
-        </ng-container>
 
-        <ng-container *ngIf="tab === 'sessions'">
+            <div class="mux-section-title">{{ t('mux.settings.sectionSessions') }}</div>
             <div class="mux-form-line">
                 <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div></div>
                 <div class="mux-line-control">
@@ -298,150 +392,134 @@ import {
             </div>
         </ng-container>
 
-        <ng-container *ngIf="tab === 'templates' && !editing">
-            <div class="mb-3">
-                <button type="button" class="btn btn-primary btn-sm"
-                        [disabled]="!mux.sessions.length"
-                        (click)="saveTemplate()">
-                    <i class="fas fa-bookmark me-1"></i>{{ t('mux.settings.tplSave') }}
-                </button>
+        <!-- ==================== template editor modal ==================== -->
+        <ng-template #editorTpl let-modal>
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-layer-group me-2"></i>
+                    <input type="text" class="form-control d-inline-block" style="width: 260px"
+                           [placeholder]="t('mux.edit.name')" maxlength="60"
+                           [(ngModel)]="editing.name" (ngModelChange)="dirty = true">
+                </h5>
+                <span *ngIf="dirty" class="mux-edit-unsaved me-2">{{ t('mux.edit.unsaved') }}</span>
+                <button type="button" class="btn-close" (click)="closeEditor(false)"></button>
             </div>
-            <div *ngIf="!templates.length" class="mux-tpl-empty">{{ t('mux.settings.tplEmpty') }}</div>
-            <div *ngFor="let tpl of templates" class="mux-tpl-row">
-                <i class="fas fa-layer-group"></i>
-                <span class="mux-tpl-name">{{ tpl.name }}</span>
-                <span class="mux-tpl-meta">{{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }}
-                    · {{ tpl.createdAt | date:'short' }}</span>
-                <div class="ms-auto d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-primary" (click)="applyTemplate(tpl)">
-                        <i class="fas fa-play me-1"></i>{{ t('mux.tmpl.apply') }}
-                    </button>
-                    <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(tpl)">
-                        <i class="fas fa-pencil-alt me-1"></i>{{ t('mux.edit.short') }}
-                    </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" (click)="deleteTemplate(tpl)">
-                        <i class="fas fa-trash-alt me-1"></i>{{ t('mux.tmpl.delete') }}
-                    </button>
-                </div>
-            </div>
-        </ng-container>
-
-        <ng-container *ngIf="tab === 'templates' && editing">
-            <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
-                <button type="button" class="btn btn-sm btn-secondary" (click)="backFromEditor()">
-                    <i class="fas fa-arrow-left"></i>
-                </button>
-                <input type="text" class="form-control" style="width: 240px"
-                       [placeholder]="t('mux.edit.name')" maxlength="60"
-                       [(ngModel)]="editing.name" (ngModelChange)="dirty = true">
-                <span *ngIf="dirty" class="mux-edit-unsaved">{{ t('mux.edit.unsaved') }}</span>
-                <div class="ms-auto d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-secondary" (click)="previewEdit()">
-                        <i class="fas fa-flask me-1"></i>{{ t('mux.edit.preview') }}
-                    </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" [disabled]="!dirty" (click)="discardEdit()">
-                        {{ t('mux.edit.discard') }}
-                    </button>
-                    <button type="button" class="btn btn-sm btn-primary" [disabled]="!dirty" (click)="saveEdit()">
-                        <i class="fas fa-check me-1"></i>{{ t('mux.edit.save') }}
-                    </button>
-                </div>
-            </div>
-
-            <div class="mux-tpl-meta mb-1">{{ t('mux.edit.windows') }}</div>
-            <div cdkDropList (cdkDropListDropped)="windowDropped($event)">
-                <div *ngFor="let w of editing.windows; let i = index" class="mux-tpl-row mux-edit-window" cdkDrag
-                 (contextmenu)="windowContextMenu($event, i)">
-                    <i class="fas fa-grip-vertical mux-drag-handle" cdkDragHandle title="⇕"></i>
-                    <span class="mux-tpl-name">{{ t('mux.edit.window', { n: i + 1 }) }}</span>
-                    <span class="mux-tpl-meta">
-                        {{ t('mux.edit.panes', { n: paneCount(w) }) }} · {{ summary(w).profile }}
-                    </span>
-                    <div class="ms-auto d-flex gap-1">
-                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                [disabled]="i === 0" [title]="t('mux.edit.up')" (click)="moveWindow(i, -1)">↑</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                [disabled]="i === editing.windows.length - 1" [title]="t('mux.edit.down')" (click)="moveWindow(i, 1)">↓</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
-                                (click)="expanded = expanded === i ? null : i">
-                            <ng-container *ngIf="expanded !== i">{{ t('mux.edit.expand') }} ▾</ng-container>
-                            <ng-container *ngIf="expanded === i">{{ t('mux.edit.collapse') }} ▴</ng-container>
-                        </button>
-                    </div>
-
-                    <div *ngIf="expanded === i" class="mux-canvas" (click)="$event.stopPropagation()">
-                        <ng-container *ngTemplateOutlet="nodeTpl; context: {$implicit: w.layout, path: []}"></ng-container>
-                    </div>
-                    <div *ngIf="expanded === i && !selectedPath" class="mux-sel-panel">
-                        <span class="mux-tpl-meta">{{ t('mux.ge.selectHint') }}</span>
-                    </div>
-                    <div *ngIf="expanded === i && selectedPath && selectedPaneSpec as p" class="mux-sel-panel">
-                        <div class="d-flex align-items-center gap-2 flex-wrap">
-                            <i class="fas fa-terminal"></i>
-                            <strong>{{ selectedPaneInfo.profileName }}</strong>
-                            <span class="mux-badge" [class.copy]="!p.profileId">
-                                {{ p.profileId ? t('mux.ge.ref') : t('mux.ge.copy') }}
-                            </span>
-                            <span class="mux-tpl-meta ms-2">{{ t('mux.ge.menuHint') }}</span>
+            <div class="modal-body">
+                <div class="mux-tpl-meta mb-1">{{ t('mux.edit.windows') }}</div>
+                <div cdkDropList (cdkDropListDropped)="windowDropped($event)">
+                    <div *ngFor="let w of editing.windows; let i = index" class="mux-tpl-row mux-edit-window" cdkDrag
+                         (contextmenu)="windowContextMenu($event, i)">
+                        <i class="fas fa-grip-vertical mux-drag-handle" cdkDragHandle title="⇕"></i>
+                        <span class="mux-tpl-name">{{ t('mux.edit.window', { n: i + 1 }) }}</span>
+                        <span class="mux-tpl-meta">
+                            {{ t('mux.edit.panes', { n: paneCount(w) }) }} · {{ summary(w).profile }}
+                        </span>
+                        <div class="ms-auto d-flex gap-1">
+                            <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                    [disabled]="i === 0" [title]="t('mux.edit.up')" (click)="moveWindow(i, -1)">↑</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                    [disabled]="i === editing.windows.length - 1" [title]="t('mux.edit.down')" (click)="moveWindow(i, 1)">↓</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                    (click)="expanded = expanded === i ? null : i">
+                                <ng-container *ngIf="expanded !== i">{{ t('mux.edit.expand') }} ▾</ng-container>
+                                <ng-container *ngIf="expanded === i">{{ t('mux.edit.collapse') }} ▴</ng-container>
+                            </button>
                         </div>
 
-                        <ng-container *ngIf="p.profileId">
-                            <div class="mux-inline-field">
-                                <button type="button" class="btn btn-sm btn-outline-secondary"
-                                        (click)="assignProfile()">
-                                    <i class="fas fa-search me-1"></i>{{ t('mux.ge.assignProfile') }}
-                                </button>
-                            </div>
-                        </ng-container>
-
-                        <ng-container *ngIf="!p.profileId">
-                            <div class="mux-inline-field">
-                                <label>{{ t('mux.ge.paneName') }}</label>
-                                <input type="text" class="form-control form-control-sm" style="width: 260px"
-                                       [(ngModel)]="p.profile.name" (ngModelChange)="dirty = true">
-                            </div>
-                            <div class="mux-inline-field" *ngIf="p.profile.type === 'local'">
-                                <label>{{ t('mux.ge.command') }}</label>
-                                <input type="text" class="form-control form-control-sm" style="width: 320px"
-                                       [(ngModel)]="p.profile.options.command" (ngModelChange)="dirty = true">
-                            </div>
-                            <div class="mux-inline-field" *ngIf="p.profile.type === 'local'">
-                                <label>{{ t('mux.ge.cwd') }}</label>
-                                <input type="text" class="form-control form-control-sm" style="width: 320px"
-                                       [(ngModel)]="p.profile.options.cwd" (ngModelChange)="dirty = true">
-                            </div>
-                            <div class="mux-inline-field">
-                                <label>{{ t('mux.ge.promote') }}</label>
-                                <input type="text" class="form-control form-control-sm" style="width: 200px"
-                                       [placeholder]="t('mux.ge.promoteName')" maxlength="60" [(ngModel)]="promoteName">
-                                <button type="button" class="btn btn-sm btn-outline-primary"
-                                        [disabled]="!promoteName.trim()" (click)="promoteSelected()">
-                                    <i class="fas fa-upload me-1"></i>{{ t('mux.ge.promote') }}
-                                </button>
-                            </div>
-                        </ng-container>
+                        <div *ngIf="expanded === i" class="mux-canvas" (click)="$event.stopPropagation()">
+                            <ng-container *ngTemplateOutlet="nodeTpl; context: {$implicit: w.layout, path: []}"></ng-container>
+                        </div>
+                        <div *ngIf="expanded === i" class="mux-sel-bar">
+                            <ng-container *ngIf="selectedPath && selectedPaneSpec as p">
+                                <i class="fas fa-terminal"></i>
+                                <strong>{{ selectedPaneInfo.profileName }}</strong>
+                                <span class="mux-badge" [class.copy]="!p.profileId">
+                                    {{ p.profileId ? t('mux.ge.ref') : t('mux.ge.copy') }}
+                                </span>
+                            </ng-container>
+                            <span class="ms-auto">{{ t('mux.ge.menuHint') }}</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div *ngIf="!editing.windows.length" class="mux-tpl-empty">{{ t('mux.edit.noWindows') }}</div>
+                <div *ngIf="!editing.windows.length" class="mux-tpl-empty">{{ t('mux.edit.noWindows') }}</div>
 
-            <div class="d-flex align-items-center gap-2 flex-wrap mt-3">
-                <button type="button" class="btn btn-sm btn-outline-secondary" (click)="importWindow()">
-                    <i class="fas fa-download me-1"></i>{{ t('mux.edit.importWindow') }}…
+                <div class="d-flex align-items-center gap-2 flex-wrap mt-3">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" (click)="importWindow()">
+                        <i class="fas fa-download me-1"></i>{{ t('mux.edit.importWindow') }}…
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" (click)="addBlankWindow()">
+                        <i class="fas fa-plus me-1"></i>{{ t('mux.edit.addBlankWindow') }}…
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-secondary me-auto" (click)="previewEdit()">
+                    <i class="fas fa-flask me-1"></i>{{ t('mux.edit.preview') }}
                 </button>
-                <button type="button" class="btn btn-sm btn-outline-secondary" (click)="addBlankWindow()">
-                    <i class="fas fa-plus me-1"></i>{{ t('mux.edit.addBlankWindow') }}…
+                <button type="button" class="btn btn-sm btn-outline-danger" [disabled]="!dirty" (click)="discardEdit()">
+                    {{ t('mux.edit.discard') }}
+                </button>
+                <button type="button" class="btn btn-sm btn-primary" [disabled]="!dirty" (click)="closeEditor(true)">
+                    <i class="fas fa-check me-1"></i>{{ t('mux.edit.save') }}
                 </button>
             </div>
-        </ng-container>
+        </ng-template>
 
+        <!-- ==================== pane config modal ==================== -->
+        <ng-template #paneTpl let-modal>
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-terminal me-2"></i>{{ t('mux.paneModal.title') }}</h5>
+                <button type="button" class="btn-close" (click)="paneModalRef?.dismiss()"></button>
+            </div>
+            <div class="modal-body" *ngIf="selectedPaneSpec?.profile as pf">
+                <div class="text-muted mb-3" style="font-size: 12px">{{ t('mux.paneModal.hint') }}</div>
+                <div class="mux-inline-field mb-2">
+                    <label>{{ t('mux.ge.paneName') }}</label>
+                    <input type="text" class="form-control form-control-sm" style="width: 280px"
+                           [(ngModel)]="pf.name" (ngModelChange)="dirty = true">
+                </div>
+                <div class="mux-inline-field mb-2" *ngIf="pf.type === 'local'">
+                    <label>{{ t('mux.ge.command') }}</label>
+                    <input type="text" class="form-control form-control-sm" style="width: 340px"
+                           [(ngModel)]="pf.options.command" (ngModelChange)="dirty = true">
+                </div>
+                <div class="mux-inline-field mb-2" *ngIf="pf.type === 'local'">
+                    <label>{{ t('mux.ge.cwd') }}</label>
+                    <input type="text" class="form-control form-control-sm" style="width: 340px"
+                           [(ngModel)]="pf.options.cwd" (ngModelChange)="dirty = true">
+                </div>
+                <hr>
+                <div class="mux-inline-field">
+                    <label>{{ t('mux.ge.promote') }}</label>
+                    <input type="text" class="form-control form-control-sm" style="width: 220px"
+                           [placeholder]="t('mux.ge.promoteName')" maxlength="60" [(ngModel)]="promoteName">
+                    <button type="button" class="btn btn-sm btn-outline-primary"
+                            [disabled]="!promoteName.trim()" (click)="promoteSelected()">
+                        <i class="fas fa-upload me-1"></i>{{ t('mux.paneModal.saveAs') }}
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-sm btn-secondary" (click)="paneModalRef?.dismiss()">
+                    {{ t('mux.paneModal.cancel') }}
+                </button>
+                <button type="button" class="btn btn-sm btn-primary" (click)="paneModalRef?.close()">
+                    {{ t('mux.paneModal.save') }}
+                </button>
+            </div>
+        </ng-template>
+
+        <!-- recursive layout canvas -->
         <ng-template #nodeTpl let-node let-path="path">
             <ng-container *ngIf="isContainer(node)">
                 <div class="mux-node" [class.mux-h]="node.orientation === 'h'" [class.mux-v]="node.orientation === 'v'">
-                    <div *ngFor="let child of node.children; let i = index"
-                         class="mux-cell" [style.flex-grow]="node.ratios[i] || 1">
-                        <ng-container *ngTemplateOutlet="nodeTpl; context: {$implicit: child, path: path.concat(i)}"></ng-container>
-                    </div>
+                    <ng-container *ngFor="let child of node.children; let i = index">
+                        <div *ngIf="i > 0" class="mux-divider"
+                             (mousedown)="startDividerDrag($event, node, i)"></div>
+                        <div class="mux-cell" [style.flex-grow]="node.ratios[i] || 1">
+                            <ng-container *ngTemplateOutlet="nodeTpl; context: {$implicit: child, path: path.concat(i)}"></ng-container>
+                        </div>
+                    </ng-container>
                 </div>
             </ng-container>
             <div *ngIf="!isContainer(node)" class="mux-gpane"
@@ -452,12 +530,16 @@ import {
                 <span class="mux-badge" [class.copy]="!node.pane.profileId">
                     {{ node.pane.profileId ? t('mux.ge.ref') : t('mux.ge.copy') }}
                 </span>
+                <button type="button" class="mux-pane-edit" [title]="t('mux.settings.menuEdit')"
+                        (click)="openPaneEditor($event, path)">
+                    <i class="fas fa-pencil-alt"></i>
+                </button>
             </div>
         </ng-template>
     `,
 })
 export class MuxSettingsComponent implements OnInit, OnDestroy {
-    tab = 'statusbar'
+    tab = 'templates'
     settings: any
     profiles: any[] = []
     private changedSub: Subscription | null = null
@@ -469,12 +551,18 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     selectedPath: number[] | null = null
     promoteName = ''
 
+    @ViewChild('editorTpl', { static: false }) editorTpl?: TemplateRef<any>
+    @ViewChild('paneTpl', { static: false }) paneTpl?: TemplateRef<any>
+    private editorModalRef: any = null
+    paneModalRef: any = null
+
     constructor (
         private config: ConfigService,
         private profilesService: ProfilesService,
         private i18n: I18n,
         private mux: MuxService,
         private platform: PlatformService,
+        private ngb: NgbModal,
         private cdr: ChangeDetectorRef,
     ) { }
 
@@ -483,10 +571,7 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         void this.profilesService.getProfiles().then(list => {
             this.profiles = list
         })
-        // A save from the prompt modal or another surface (rail context menu,
-        // palette) must show up here immediately.
         this.changedSub = this.mux.changed$.subscribe(() => this.cdr.detectChanges())
-        // Debug handle for CDP-based verification (mirrors window.tabbyMux).
         const w = window as any
         w.__muxSettingsComponent = this
     }
@@ -497,6 +582,29 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
 
     get templates (): MuxSessionTemplate[] {
         return this.mux.templates
+    }
+
+    /** Profiles-page-style grouping: named groups sorted, ungrouped last. */
+    get templateGroups (): { name: string, templates: MuxSessionTemplate[] }[] {
+        const groups = new Map<string, MuxSessionTemplate[]>()
+        for (const tpl of this.templates) {
+            const key = (tpl.group ?? '').trim()
+            const list = groups.get(key) ?? []
+            list.push(tpl)
+            groups.set(key, list)
+        }
+        const out: { name: string, templates: MuxSessionTemplate[] }[] = []
+        for (const key of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+            if (key === '') {
+                continue
+            }
+            out.push({ name: key, templates: groups.get(key)! })
+        }
+        const ungrouped = groups.get('')
+        if (ungrouped?.length) {
+            out.push({ name: this.t('mux.settings.tplGroupUngrouped'), templates: ungrouped })
+        }
+        return out
     }
 
     t (key: string, params?: Record<string, any>): string {
@@ -519,9 +627,90 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         void this.mux.deleteTemplate(tpl)
     }
 
+    /** Kebab menu of a template list entry. */
+    entryMenu (event: MouseEvent, tpl: MuxSessionTemplate): void {
+        const items: MenuItemOptions[] = [
+            {
+                label: this.t('mux.settings.menuEdit'),
+                click: () => this.openEditor(tpl),
+            },
+            {
+                label: this.t('mux.settings.menuRename'),
+                click: () => void this.renameTemplate(tpl),
+            },
+            {
+                label: this.t('mux.settings.menuSetGroup'),
+                click: () => void this.setTemplateGroup(tpl),
+            },
+            { type: 'separator' },
+            {
+                label: this.t('mux.settings.menuDelete'),
+                click: () => void this.mux.deleteTemplate(tpl),
+            },
+        ]
+        this.platform.popupContextMenu(items, event)
+    }
+
+    private async renameTemplate (tpl: MuxSessionTemplate): Promise<void> {
+        const name = await this.mux.promptForText('mux.windowPrompt', tpl.name)
+        if (name === null) {
+            return
+        }
+        const edited = { ...tpl, name: name.trim() || tpl.name }
+        await this.mux.saveTemplateEdit(edited as any)
+    }
+
+    private async setTemplateGroup (tpl: MuxSessionTemplate): Promise<void> {
+        const group = await this.mux.promptForText('mux.settings.tplGroupPrompt', tpl.group ?? '')
+        if (group === null) {
+            return
+        }
+        const edited = { ...tpl, group: group.trim() }
+        await this.mux.saveTemplateEdit(edited as any)
+    }
+
     // ==================================================================
-    // Template editor: windows
+    // Template editor (floating modal)
     // ==================================================================
+
+    openEditor (tpl: MuxSessionTemplate): void {
+        this.startEdit(tpl)
+        this.editorModalRef = this.ngb.open(this.editorTpl!, {
+            size: 'xl',
+            backdrop: 'static',
+            keyboard: false,
+        })
+        this.editorModalRef.result.finally(() => {
+            this.editorModalRef = null
+        })
+    }
+
+    /** Closes the editor modal; saves first when requested. */
+    closeEditor (save: boolean): void {
+        if (save) {
+            this.saveEdit()
+        } else if (this.dirty) {
+            void this.confirmDiscard().then(ok => {
+                if (ok) {
+                    this.editorModalRef?.close()
+                }
+            })
+            return
+        }
+        this.editorModalRef?.close()
+    }
+
+    private async confirmDiscard (): Promise<boolean> {
+        const result = await this.platform.showMessageBox({
+            type: 'warning',
+            message: this.t('mux.edit.unsaved'),
+            detail: this.t('mux.edit.discard') + '?',
+            buttons: [this.t('mux.edit.keepEditing'), this.t('mux.edit.discard')],
+            defaultId: 0,
+            cancelId: 0,
+        })
+        return result.response === 1
+    }
 
     startEdit (tpl: MuxSessionTemplate): void {
         const copy = deepClone(tpl) as any
@@ -532,29 +721,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         this.expanded = null
         this.selectedPath = null
         this.promoteName = ''
-    }
-
-    backFromEditor (): void {
-        if (this.dirty) {
-            void this.confirmDiscard()
-            return
-        }
-        this.editing = null
-    }
-
-    private async confirmDiscard (): Promise<void> {
-        const result = await this.platform.showMessageBox({
-            type: 'warning',
-            message: this.t('mux.edit.unsaved'),
-            detail: this.t('mux.edit.discard') + '?',
-            buttons: [this.t('mux.edit.keepEditing'), this.t('mux.edit.discard')],
-            defaultId: 0,
-            cancelId: 0,
-        })
-        if (result.response === 1) {
-            this.editing = null
-            this.dirty = false
-        }
     }
 
     discardEdit (): void {
@@ -688,7 +854,7 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     }
 
     // ==================================================================
-    // Template editor: graphical layout canvas
+    // Graphical layout canvas
     // ==================================================================
 
     isContainer (node: any): boolean {
@@ -707,80 +873,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         event.stopPropagation()
         this.selectedPath = [...path]
         this.promoteName = ''
-    }
-
-    /**
-     * Right-click menu on a canvas pane: all structural actions live here,
-     * keeping the panel below the canvas edit-only.
-     */
-    paneContextMenu (event: MouseEvent, path: number[]): void {
-        event.preventDefault()
-        event.stopPropagation()
-        this.selectedPath = [...path]
-        this.promoteName = ''
-        const pane = this.selectedPaneSpec
-        const items: MenuItemOptions[] = [
-            {
-                label: this.t('mux.ge.splitH'),
-                click: () => this.splitSelected('h'),
-            },
-            {
-                label: this.t('mux.ge.splitV'),
-                click: () => this.splitSelected('v'),
-            },
-            {
-                label: this.t('mux.edit.duplicate'),
-                click: () => this.duplicateSelected(),
-            },
-            { type: 'separator' },
-            {
-                label: this.t('mux.edit.remove'),
-                click: () => this.deleteSelected(),
-            },
-            { type: 'separator' },
-            {
-                label: this.t('mux.ge.assignProfile') + '…',
-                click: () => void this.assignProfile(),
-            },
-        ]
-        if (pane?.profileId) {
-            items.push({
-                label: this.t('mux.ge.fork') + '…',
-                click: () => this.forkSelected(),
-            })
-        } else if (pane?.profile) {
-            items.push({
-                label: this.t('mux.ge.promote') + '…',
-                click: () => this.focusPromote(),
-            })
-        }
-        this.platform.popupContextMenu(items, event)
-    }
-
-    /** Assigns a profile to the selected pane as a reference (searchable picker). */
-    async assignProfile (): Promise<void> {
-        const pane = this.selectedPaneSpec
-        if (!pane) {
-            return
-        }
-        const profile = await this.mux.pickProfile()
-        if (!profile) {
-            return
-        }
-        pane.profileId = profile.id ?? null
-        pane.profile = null
-        this.dirty = true
-    }
-
-    /** Scrolls attention to the promote row after picking it from the menu. */
-    private focusPromote (): void {
-        this.promoteName = this.promoteName || (this.selectedPaneSpec?.profile?.name ?? '') + ''
-        // Select the pane so the copy panel with the promote row is visible.
-        this.cdr.detectChanges()
-        setTimeout(() => {
-            const input = document.querySelector('mux-settings input[placeholder]')
-            ;(input as HTMLInputElement | null)?.focus()
-        }, 50)
     }
 
     get selectedLayout (): MuxLayoutContainer | null {
@@ -804,7 +896,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         return info ?? { profileName: '?' }
     }
 
-    /** Default pane for split ops: reference to the first local profile. */
     private defaultPaneSpec (): MuxPaneSpec {
         const preferred = this.profiles.find(p => p.type === 'local')
         return { profileId: preferred?.id ?? this.profiles[0]?.id ?? null, profile: null }
@@ -817,8 +908,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
             return
         }
         splitSpecAt(layout, this.selectedPath, direction, this.defaultPaneSpec())
-        // normalizeSpec may hoist containers and shift indexes - recover
-        // the selection through pane identity (captured BEFORE mutating).
         this.selectedPath = findPathByPane(layout, pane)
         this.dirty = true
     }
@@ -839,8 +928,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         if (!layout || !this.selectedPath || !this.editing || this.expanded === null) {
             return
         }
-        // Deleting the last pane empties the window - drop it instead of
-        // keeping a spec that would restore a broken window.
         if (specPanes(layout).length <= 1) {
             this.removeWindow(this.expanded)
             return
@@ -850,7 +937,56 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         this.dirty = true
     }
 
-    /** Forks the referenced profile into an embedded editable copy. */
+    paneContextMenu (event: MouseEvent, path: number[]): void {
+        event.preventDefault()
+        event.stopPropagation()
+        this.selectedPath = [...path]
+        this.promoteName = ''
+        const items: MenuItemOptions[] = [
+            { label: this.t('mux.ge.splitH'), click: () => this.splitSelected('h') },
+            { label: this.t('mux.ge.splitV'), click: () => this.splitSelected('v') },
+            { label: this.t('mux.edit.duplicate'), click: () => this.duplicateSelected() },
+            { type: 'separator' },
+            { label: this.t('mux.edit.remove'), click: () => this.deleteSelected() },
+            { type: 'separator' },
+            { label: this.t('mux.ge.assignProfile') + '…', click: () => void this.assignProfile() },
+        ]
+        this.platform.popupContextMenu(items, event)
+    }
+
+    async assignProfile (): Promise<void> {
+        const pane = this.selectedPaneSpec
+        if (!pane) {
+            return
+        }
+        const profile = await this.mux.pickProfile()
+        if (!profile) {
+            return
+        }
+        pane.profileId = profile.id ?? null
+        pane.profile = null
+        this.dirty = true
+    }
+
+    /**
+     * Corner edit button: opens the pane's config in its own modal.
+     * References fork on open - saving stores an independent copy with the
+     * template; promoting to the global registry is an explicit action.
+     */
+    openPaneEditor (event: MouseEvent, path: number[]): void {
+        event.stopPropagation()
+        this.selectedPath = [...path]
+        this.promoteName = ''
+        const pane = this.selectedPaneSpec
+        if (!pane) {
+            return
+        }
+        if (pane.profileId) {
+            this.forkSelected()
+        }
+        this.paneModalRef = this.ngb.open(this.paneTpl!, { size: 'lg' })
+    }
+
     forkSelected (): void {
         const pane = this.selectedPaneSpec
         if (!pane || !pane.profileId) {
@@ -870,9 +1006,48 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         }
         await this.mux.promotePaneProfile(pane, this.promoteName)
         this.promoteName = ''
-        // refresh the profiles dropdown with the newly created profile
         this.profiles = await this.profilesService.getProfiles()
         this.dirty = true
+        this.paneModalRef?.close()
+    }
+
+    // ==================================================================
+    // Divider dragging (ratio adjustment)
+    // ==================================================================
+
+    startDividerDrag (event: MouseEvent, node: MuxLayoutContainer, index: number): void {
+        event.preventDefault()
+        event.stopPropagation()
+        const container = (event.target as HTMLElement).parentElement
+        if (!container) {
+            return
+        }
+        const horizontal = node.orientation === 'h'
+        const rect = container.getBoundingClientRect()
+        const size = horizontal ? rect.width : rect.height
+        const prefix = node.ratios.slice(0, index - 1).reduce((a, b) => a + b, 0)
+        const minR = 0.05
+        const dividerEl = event.target as HTMLElement
+        dividerEl.classList.add('dragging')
+        const onMove = (e: MouseEvent) => {
+            const pos = horizontal ? e.clientX - rect.left : e.clientY - rect.top
+            let boundary = pos / Math.max(1, size)
+            const lo = prefix + minR
+            const hi = prefix + node.ratios[index - 1] + node.ratios[index] - minR
+            boundary = Math.min(hi, Math.max(lo, boundary))
+            const delta = boundary - (prefix + node.ratios[index - 1])
+            node.ratios[index - 1] += delta
+            node.ratios[index] -= delta
+            this.cdr.detectChanges()
+        }
+        const onUp = () => {
+            dividerEl.classList.remove('dragging')
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+            this.dirty = true
+        }
+        document.addEventListener('mousemove', onMove)
+        document.addEventListener('mouseup', onUp)
     }
 }
 
