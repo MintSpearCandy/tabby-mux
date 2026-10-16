@@ -1,18 +1,33 @@
+import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop'
 import { ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core'
-import { ConfigService, ProfilesService } from 'tabby-core'
+import { ConfigService, PlatformService, ProfilesService } from 'tabby-core'
 import { Subscription } from 'rxjs'
 import { I18n } from '../i18n'
 import { CONFIG_KEY } from '../configKeys'
 import { MuxService } from '../mux.service'
 import { MuxSessionTemplate } from '../types'
+import {
+    appendPane,
+    deepClone,
+    deletePane,
+    duplicatePane,
+    getRootOrientation,
+    setRootOrientation,
+    windowPanes,
+    windowSummary,
+} from '../template.model'
 
 /**
  * Settings page for tabby-mux, organized in tabs. Values bind straight onto
  * the config proxy (declared in MuxConfigProvider defaults, so writes
  * persist); every change saves immediately. Row structure mirrors the
- * native settings pages (`.form-line`-style header + control), with
- * self-contained styling since the native classes are scoped to their
- * components.
+ * native settings pages, with self-contained styling since the native
+ * classes are scoped to their components.
+ *
+ * The templates tab has two modes: the list, and an in-place editor working
+ * on a deep-cloned copy of one template (structural edits mutate recovery
+ * token trees via template.model helpers) with explicit save / discard /
+ * preview-apply.
  */
 @Component({
     selector: 'mux-settings',
@@ -56,6 +71,7 @@ import { MuxSessionTemplate } from '../types'
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
             padding: 8px 10px;
             margin: 4px 0;
             border-radius: 5px;
@@ -71,6 +87,40 @@ import { MuxSessionTemplate } from '../types'
             font-size: 13px;
             color: var(--theme-fg-more, #999);
         }
+        .mux-drag-handle {
+            cursor: grab;
+            color: var(--theme-fg-more-2, #666);
+            padding: 0 2px;
+        }
+        .mux-edit-window.cdk-drag-preview, .mux-edit-window.cdk-drag-placeholder { opacity: .6; }
+        .mux-edit-window { border-radius: 5px; }
+        .mux-edit-panes {
+            flex-basis: 100%;
+            border-top: 1px dashed var(--theme-bg-less, rgba(128, 128, 128, .25));
+            margin-top: 6px;
+            padding-top: 6px;
+        }
+        .mux-edit-pane {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 6px;
+            margin: 2px 0;
+            border-radius: 4px;
+            background: var(--theme-bg-less, rgba(128, 128, 128, .1));
+            font-size: 12px;
+        }
+        .mux-edit-pane .mux-pane-meta {
+            color: var(--theme-fg-more, #999);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .mux-edit-unsaved {
+            color: var(--theme-warning, #f0ad4e);
+            font-size: 12px;
+        }
+        .mux-btn-sq { padding: 2px 8px; }
     `],
     template: `
         <h3 class="mb-3">Tabby Mux</h3>
@@ -202,7 +252,7 @@ import { MuxSessionTemplate } from '../types'
             </div>
         </ng-container>
 
-        <ng-container *ngIf="tab === 'templates'">
+        <ng-container *ngIf="tab === 'templates' && !editing">
             <div class="mb-3">
                 <button type="button" class="btn btn-primary btn-sm"
                         [disabled]="!mux.sessions.length"
@@ -217,15 +267,133 @@ import { MuxSessionTemplate } from '../types'
                 <span class="mux-tpl-meta">{{ t('mux.settings.tplWindows', { n: tpl.windows.length }) }}
                     · {{ tpl.createdAt | date:'short' }}</span>
                 <div class="ms-auto d-flex gap-2">
-                    <button type="button" class="btn btn-sm btn-primary"
-                            (click)="applyTemplate(tpl)">
+                    <button type="button" class="btn btn-sm btn-primary" (click)="applyTemplate(tpl)">
                         <i class="fas fa-play me-1"></i>{{ t('mux.tmpl.apply') }}
                     </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger"
-                            (click)="deleteTemplate(tpl)">
+                    <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(tpl)">
+                        <i class="fas fa-pencil-alt me-1"></i>{{ t('mux.edit.short') }}
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" (click)="deleteTemplate(tpl)">
                         <i class="fas fa-trash-alt me-1"></i>{{ t('mux.tmpl.delete') }}
                     </button>
                 </div>
+            </div>
+        </ng-container>
+
+        <ng-container *ngIf="tab === 'templates' && editing">
+            <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+                <button type="button" class="btn btn-sm btn-secondary" (click)="backFromEditor()">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <input type="text" class="form-control" style="width: 240px"
+                       [placeholder]="t('mux.edit.name')" maxlength="60"
+                       [(ngModel)]="editing.name" (ngModelChange)="dirty = true">
+                <span *ngIf="dirty" class="mux-edit-unsaved">{{ t('mux.edit.unsaved') }}</span>
+                <div class="ms-auto d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-secondary" (click)="previewEdit()">
+                        <i class="fas fa-flask me-1"></i>{{ t('mux.edit.preview') }}
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" [disabled]="!dirty" (click)="discardEdit()">
+                        {{ t('mux.edit.discard') }}
+                    </button>
+                    <button type="button" class="btn btn-sm btn-primary" [disabled]="!dirty" (click)="saveEdit()">
+                        <i class="fas fa-check me-1"></i>{{ t('mux.edit.save') }}
+                    </button>
+                </div>
+            </div>
+
+            <div class="mux-tpl-meta mb-1">{{ t('mux.edit.windows') }}</div>
+            <div cdkDropList (cdkDropListDropped)="windowDropped($event)">
+                <div *ngFor="let w of editing.windows; let i = index" class="mux-tpl-row mux-edit-window" cdkDrag>
+                    <i class="fas fa-grip-vertical mux-drag-handle" cdkDragHandle title="⇕"></i>
+                    <span class="mux-tpl-name">{{ t('mux.edit.window', { n: i + 1 }) }}</span>
+                    <span class="mux-tpl-meta">
+                        {{ t('mux.edit.panes', { n: paneCount(w) }) }} · {{ summary(w).profile }}
+                    </span>
+                    <div class="ms-auto d-flex gap-1">
+                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                [disabled]="i === 0" [title]="t('mux.edit.up')" (click)="moveWindow(i, -1)">↑</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                [disabled]="i === editing.windows.length - 1" [title]="t('mux.edit.down')" (click)="moveWindow(i, 1)">↓</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                [title]="t('mux.edit.duplicate')" (click)="duplicateWindow(i)">
+                            <i class="fas fa-copy"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-danger mux-btn-sq"
+                                [title]="t('mux.edit.remove')" (click)="removeWindow(i)">
+                            <i class="fas fa-trash-alt"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                (click)="expanded = expanded === i ? null : i">
+                            <ng-container *ngIf="expanded !== i">{{ t('mux.edit.expand') }} ▾</ng-container>
+                            <ng-container *ngIf="expanded === i">{{ t('mux.edit.collapse') }} ▴</ng-container>
+                        </button>
+                    </div>
+
+                    <div *ngIf="expanded === i" class="mux-edit-panes">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span class="mux-tpl-meta">{{ t('mux.edit.orientation') }}:</span>
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn"
+                                        [class.btn-primary]="orientation(w) === 'h'"
+                                        [class.btn-outline-secondary]="orientation(w) !== 'h'"
+                                        (click)="setOrientation(w, 'h')">{{ t('mux.edit.horizontal') }}</button>
+                                <button type="button" class="btn"
+                                        [class.btn-primary]="orientation(w) === 'v'"
+                                        [class.btn-outline-secondary]="orientation(w) !== 'v'"
+                                        (click)="setOrientation(w, 'v')">{{ t('mux.edit.vertical') }}</button>
+                            </div>
+                        </div>
+                        <div *ngFor="let p of paneList(w)" class="mux-edit-pane">
+                            <i class="fas fa-terminal"></i>
+                            <strong>{{ p.profileName }}</strong>
+                            <span class="mux-pane-meta">
+                                {{ p.type.replace('app:', '') }}<ng-container *ngIf="p.cwd"> · {{ p.cwd }}</ng-container>
+                            </span>
+                            <div class="ms-auto d-flex gap-1">
+                                <button type="button" class="btn btn-sm btn-outline-secondary mux-btn-sq"
+                                        [title]="t('mux.edit.duplicate')" (click)="dupPane(w, p.index)">
+                                    <i class="fas fa-copy"></i></button>
+                                <button type="button" class="btn btn-sm btn-outline-danger mux-btn-sq"
+                                        [title]="t('mux.edit.remove')" (click)="delPane(w, p.index)">
+                                    <i class="fas fa-trash-alt"></i></button>
+                            </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 mt-2">
+                            <select class="form-select form-select-sm" style="width: 220px"
+                                    [(ngModel)]="appendProfileId">
+                                <option value="">{{ t('mux.settings.profile') }}…</option>
+                                <option *ngFor="let p of profiles" [ngValue]="p.id">{{ p.name }} ({{ p.type }})</option>
+                            </select>
+                            <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    [disabled]="!appendProfileId" (click)="appendBlankPane(w)">
+                                <i class="fas fa-plus me-1"></i>{{ t('mux.edit.appendPane') }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div *ngIf="!editing.windows.length" class="mux-tpl-empty">{{ t('mux.edit.noWindows') }}</div>
+
+            <div class="d-flex align-items-center gap-2 flex-wrap mt-3">
+                <select class="form-select form-select-sm" style="width: 260px"
+                        [(ngModel)]="importWindowKey">
+                    <option value="">{{ t('mux.edit.importWindow') }}…</option>
+                    <option *ngFor="let opt of importableWindows" [ngValue]="opt.key">
+                        {{ opt.label }}
+                    </option>
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        [disabled]="!importWindowKey" (click)="importWindow()">
+                    <i class="fas fa-download me-1"></i>{{ t('mux.edit.importWindow') }}
+                </button>
+                <select class="form-select form-select-sm" style="width: 220px"
+                        [(ngModel)]="blankProfileId">
+                    <option value="">{{ t('mux.edit.addBlankWindow') }}…</option>
+                    <option *ngFor="let p of profiles" [ngValue]="p.id">{{ p.name }} ({{ p.type }})</option>
+                </select>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        [disabled]="!blankProfileId" (click)="addBlankWindow()">
+                    <i class="fas fa-plus me-1"></i>
+                </button>
             </div>
         </ng-container>
     `,
@@ -236,11 +404,20 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     profiles: any[] = []
     private changedSub: Subscription | null = null
 
+    // ---- template editor state ----
+    editing: (MuxSessionTemplate & { windows: any[] }) | null = null
+    dirty = false
+    expanded: number | null = null
+    appendProfileId = ''
+    blankProfileId = ''
+    importWindowKey = ''
+
     constructor (
         private config: ConfigService,
         private profilesService: ProfilesService,
         private i18n: I18n,
         private mux: MuxService,
+        private platform: PlatformService,
         private cdr: ChangeDetectorRef,
     ) { }
 
@@ -252,6 +429,9 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         // A save from the prompt modal or another surface (rail context menu,
         // palette) must show up here immediately.
         this.changedSub = this.mux.changed$.subscribe(() => this.cdr.detectChanges())
+        // Debug handle for CDP-based verification (mirrors window.tabbyMux).
+        const w = window as any
+        w.__muxSettingsComponent = this
     }
 
     ngOnDestroy (): void {
@@ -280,5 +460,206 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
 
     deleteTemplate (tpl: MuxSessionTemplate): void {
         void this.mux.deleteTemplate(tpl)
+    }
+
+    // ==================================================================
+    // Template editor
+    // ==================================================================
+
+    startEdit (tpl: MuxSessionTemplate): void {
+        const copy = deepClone(tpl) as any
+        // Self-heal legacy templates saved before empty windows were pruned.
+        copy.windows = copy.windows.filter((w: any) => windowPanes(w).length > 0)
+        this.editing = copy
+        this.dirty = false
+        this.expanded = null
+        this.appendProfileId = ''
+        this.blankProfileId = ''
+        this.importWindowKey = ''
+    }
+
+    backFromEditor (): void {
+        if (this.dirty) {
+            void this.confirmDiscard()
+            return
+        }
+        this.editing = null
+    }
+
+    private async confirmDiscard (): Promise<void> {
+        const result = await this.platform.showMessageBox({
+            type: 'warning',
+            message: this.t('mux.edit.unsaved'),
+            detail: this.t('mux.edit.discard') + '?',
+            buttons: [this.t('mux.edit.keepEditing'), this.t('mux.edit.discard')],
+            defaultId: 0,
+            cancelId: 0,
+        })
+        if (result.response === 1) {
+            this.editing = null
+            this.dirty = false
+        }
+    }
+
+    discardEdit (): void {
+        if (this.editing) {
+            this.startEdit(this.templates.find(x => x.id === this.editing!.id) ?? this.editing!)
+        }
+    }
+
+    saveEdit (): void {
+        if (!this.editing) {
+            return
+        }
+        this.editing.name = this.editing.name.trim() || this.editing.name
+        void this.mux.saveTemplateEdit(deepClone(this.editing) as any)
+        this.dirty = false
+    }
+
+    previewEdit (): void {
+        if (!this.editing) {
+            return
+        }
+        void this.mux.createSessionFromTemplate(deepClone(this.editing) as any)
+    }
+
+    windowDropped (event: CdkDragDrop<string[]>): void {
+        if (event.previousIndex === event.currentIndex || !this.editing) {
+            return
+        }
+        moveItemInArray(this.editing.windows, event.previousIndex, event.currentIndex)
+        if (this.expanded === event.previousIndex) {
+            this.expanded = event.currentIndex
+        }
+        this.dirty = true
+    }
+
+    moveWindow (index: number, delta: number): void {
+        if (!this.editing) {
+            return
+        }
+        const target = index + delta
+        if (target < 0 || target >= this.editing.windows.length) {
+            return
+        }
+        const [w] = this.editing.windows.splice(index, 1)
+        this.editing.windows.splice(target, 0, w)
+        if (this.expanded === index) {
+            this.expanded = target
+        }
+        this.dirty = true
+    }
+
+    duplicateWindow (index: number): void {
+        if (!this.editing) {
+            return
+        }
+        this.editing.windows.splice(index + 1, 0, deepClone(this.editing.windows[index]))
+        this.dirty = true
+    }
+
+    removeWindow (index: number): void {
+        if (!this.editing) {
+            return
+        }
+        this.editing.windows.splice(index, 1)
+        if (this.expanded === index) {
+            this.expanded = null
+        } else if (this.expanded !== null && this.expanded > index) {
+            this.expanded--
+        }
+        this.dirty = true
+    }
+
+    // ---- pane level ----
+
+    paneCount (windowToken: any): number {
+        return windowSummary(windowToken).panes
+    }
+
+    summary (windowToken: any): { panes: number, profile: string } {
+        return windowSummary(windowToken)
+    }
+
+    paneList (windowToken: any): any[] {
+        return windowPanes(windowToken)
+    }
+
+    orientation (windowToken: any): 'h' | 'v' {
+        return getRootOrientation(windowToken)
+    }
+
+    setOrientation (windowToken: any, orientation: 'h' | 'v'): void {
+        if (getRootOrientation(windowToken) === orientation) {
+            return
+        }
+        setRootOrientation(windowToken, orientation)
+        this.dirty = true
+    }
+
+    dupPane (windowToken: any, flatIndex: number): void {
+        duplicatePane(windowToken, flatIndex)
+        this.dirty = true
+    }
+
+    delPane (windowToken: any, flatIndex: number): void {
+        deletePane(windowToken, flatIndex)
+        // Deleting the last pane empties the window - drop it instead of
+        // keeping a token that would restore a broken window.
+        const idx = this.editing?.windows.indexOf(windowToken) ?? -1
+        if (idx !== -1 && windowPanes(windowToken).length === 0) {
+            this.removeWindow(idx)
+            return
+        }
+        this.dirty = true
+    }
+
+    appendBlankPane (windowToken: any): void {
+        const profile = this.profiles.find(p => p.id === this.appendProfileId)
+        if (!profile) {
+            return
+        }
+        appendPane(windowToken, profile)
+        this.dirty = true
+    }
+
+    get importableWindows (): { key: string, label: string }[] {
+        const out: { key: string, label: string }[] = []
+        for (const session of this.mux.sessions) {
+            session.windows.forEach((win, i) => {
+                out.push({
+                    key: `${win.id}`,
+                    label: `${session.name} · ${this.t('mux.edit.window', { n: i + 1 })}`,
+                })
+            })
+        }
+        return out
+    }
+
+    async importWindow (): Promise<void> {
+        if (!this.editing || !this.importWindowKey) {
+            return
+        }
+        const win = this.mux.sessions.flatMap(s => s.windows).find(w => w.id === this.importWindowKey)
+        if (!win) {
+            return
+        }
+        const token = await this.mux.windowToken(win)
+        if (token) {
+            this.editing.windows.push(token)
+            this.dirty = true
+        }
+        this.importWindowKey = ''
+    }
+
+    addBlankWindow (): void {
+        const profile = this.profiles.find(p => p.id === this.blankProfileId)
+        if (!profile || !this.editing) {
+            return
+        }
+        const container = { type: 'app:split-tab', ratios: [1], orientation: 'h', children: [] }
+        appendPane(container, profile)
+        this.editing.windows.push(container)
+        this.dirty = true
     }
 }

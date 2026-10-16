@@ -77,6 +77,10 @@ const stubs = {
         SettingsTabProvider: stubClass('SettingsTabProvider'),
     }),
     'os': { cpus: () => [], freemem: () => 0, totalmem: () => 1 },
+    '@angular/cdk/drag-drop': {
+        DragDropModule: stubClass('DragDropModule'),
+        moveItemInArray: () => {},
+    },
     'rxjs': { Subject: StubSubject, Subscription: StubSubscription },
     '@ng-bootstrap/ng-bootstrap': { NgbModal: stubClass('NgbModal') },
 }

@@ -638,6 +638,19 @@ export class MuxService {
         this.changed$.next()
     }
 
+    /** Persists an edited template (matched by id), whole-array style. */
+    async saveTemplateEdit (edited: MuxSessionTemplate): Promise<void> {
+        const next = this.templates.map(t => t.id === edited.id ? edited : t)
+        this.config.store[CONFIG_KEY].templates = next
+        await this.config.save()
+        this.changed$.next()
+    }
+
+    /** Live recovery token of a session window, for importing into a template. */
+    async windowToken (win: MuxWindow): Promise<any | null> {
+        return await win.tab.getRecoveryToken()
+    }
+
     /**
      * Opens the searchable selector modal (the same one the profile picker
      * uses) with every saved template; choosing one creates a session.
