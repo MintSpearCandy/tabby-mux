@@ -235,6 +235,33 @@ export class MuxService {
         }
     }
 
+    /**
+     * Bulk close (context menu: others / before / after / all). More than
+     * one target asks for confirmation first - killSession closes terminals
+     * without the per-tab canClose prompt.
+     */
+    async killSessions (targets: MuxSession[]): Promise<void> {
+        const list = targets.filter(s => this.sessions.includes(s))
+        if (!list.length) {
+            return
+        }
+        if (list.length > 1) {
+            const result = await this.platform.showMessageBox({
+                type: 'warning',
+                message: this.i18n.t('mux.session.killManyConfirm', { n: list.length }),
+                buttons: [this.i18n.t('mux.paneModal.cancel'), this.i18n.t('mux.session.killButton')],
+                defaultId: 0,
+                cancelId: 0,
+            })
+            if (result.response !== 1) {
+                return
+            }
+        }
+        for (const session of [...list]) {
+            await this.killSession(session)
+        }
+    }
+
     // ==================================================================
     // Session attachment (tmux-style tab bar isolation)
     // ==================================================================
@@ -835,6 +862,8 @@ export class MuxService {
 
     /** Right-click menu for a session (rail entries, status bar chips). */
     sessionContextMenu (session: MuxSession, event: MouseEvent): void {
+        const index = this.sessionIndex(session)
+        const others = this.sessions.filter(s => s !== session)
         const items: MenuItemOptions[] = [
             {
                 label: this.i18n.t('mux.session.saveTemplate'),
@@ -848,6 +877,26 @@ export class MuxService {
             {
                 label: this.i18n.t('mux.session.kill'),
                 click: () => void this.killSession(session),
+            },
+            {
+                label: this.i18n.t('mux.session.killOthers'),
+                enabled: others.length > 0,
+                click: () => void this.killSessions(others),
+            },
+            {
+                label: this.i18n.t('mux.session.killBefore'),
+                enabled: index > 0,
+                click: () => void this.killSessions(this.sessions.slice(0, index)),
+            },
+            {
+                label: this.i18n.t('mux.session.killAfter'),
+                enabled: index < this.sessions.length - 1,
+                click: () => void this.killSessions(this.sessions.slice(index + 1)),
+            },
+            {
+                label: this.i18n.t('mux.session.killAll'),
+                enabled: this.sessions.length > 0,
+                click: () => void this.killSessions([...this.sessions]),
             },
         ]
         this.platform.popupContextMenu(items, event)
