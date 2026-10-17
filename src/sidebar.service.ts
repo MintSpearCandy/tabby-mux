@@ -2,12 +2,14 @@ import { Injectable, Injector } from '@angular/core'
 import { AppService, ConfigService } from 'tabby-core'
 import { MuxService } from './mux.service'
 import { I18n } from './i18n'
+import { CONFIG_KEY } from './configKeys'
 
 const STYLE_ID = 'tabby-mux-rail-style'
 const RAIL_ID = 'tabby-mux-rail'
 
 const STYLE = `
 #tabby-mux-rail {
+    position: relative;
     display: none;
     flex-direction: column;
     flex-shrink: 0;
@@ -32,10 +34,6 @@ const STYLE = `
     color: var(--theme-fg-more, #999);
     text-transform: uppercase;
 }
-#tabby-mux-rail .mux-rail-header .mux-rail-count {
-    margin-left: auto;
-    font-weight: 400;
-}
 #tabby-mux-rail .mux-rail-sessions {
     flex: 1;
     min-height: 40px;
@@ -58,56 +56,36 @@ const STYLE = `
     background: var(--theme-primary, #0d6efd);
     color: var(--theme-primary-fg, #fff);
 }
+#tabby-mux-rail .mux-rail-session.attached .mux-rail-index,
 #tabby-mux-rail .mux-rail-session.attached .mux-rail-count { color: inherit; opacity: .8; }
-#tabby-mux-rail .mux-rail-session i { font-size: 11px; opacity: .8; flex-shrink: 0; }
-#tabby-mux-rail .mux-rail-name { overflow: hidden; text-overflow: ellipsis; }
+#tabby-mux-rail .mux-rail-index {
+    flex-shrink: 0;
+    min-width: 14px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--theme-fg-more-2, #777);
+}
+#tabby-mux-rail .mux-rail-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
 #tabby-mux-rail .mux-rail-count {
-    margin-left: auto;
     color: var(--theme-fg-more, #999);
     font-size: 11px;
     flex-shrink: 0;
 }
-#tabby-mux-rail .mux-rail-templates {
+#tabby-mux-rail .mux-rail-footer {
     display: flex;
-    flex-direction: column;
-    max-height: 40%;
-    flex-shrink: 0;
-    border-top: 1px solid var(--theme-bg-less, rgba(128,128,128,.2));
-}
-#tabby-mux-rail.no-templates .mux-rail-search { display: none; }
-#tabby-mux-rail .mux-rail-search {
-    margin: 2px 8px 4px;
-    padding: 3px 8px;
-    border: none;
-    border-radius: 4px;
-    background: var(--theme-bg-less, rgba(128,128,128,.2));
-    color: var(--theme-fg, #ccc);
-    font-size: 12px;
-}
-#tabby-mux-rail .mux-rail-search::placeholder { color: var(--theme-fg-more-2, #666); }
-#tabby-mux-rail .mux-rail-search:focus { outline: 1px solid var(--theme-primary, #0d6efd); }
-#tabby-mux-rail .mux-rail-template-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0 4px 4px;
-}
-#tabby-mux-rail .mux-rail-template {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    margin: 1px 0;
-    border-radius: 4px;
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    color: var(--theme-fg-more, #999);
-}
-#tabby-mux-rail .mux-rail-template:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); color: var(--theme-fg, #ccc); }
-#tabby-mux-rail .mux-rail-template i { font-size: 11px; opacity: .8; flex-shrink: 0; }
-#tabby-mux-rail .mux-rail-template .mux-rail-name { overflow: hidden; text-overflow: ellipsis; }
-#tabby-mux-rail .mux-rail-new {
+    align-items: stretch;
+    gap: 4px;
     margin: 4px;
+    flex-shrink: 0;
+}
+#tabby-mux-rail .mux-rail-new {
+    flex: 1;
+    min-width: 0;
     padding: 6px 0;
     border: none;
     border-radius: 4px;
@@ -119,23 +97,45 @@ const STYLE = `
     align-items: center;
     justify-content: center;
     gap: 6px;
-    flex-shrink: 0;
 }
 #tabby-mux-rail .mux-rail-new:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); color: var(--theme-fg, #ccc); }
+#tabby-mux-rail .mux-rail-tmpl {
+    flex-shrink: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--theme-fg-more, #999);
+    padding: 6px 9px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+}
+#tabby-mux-rail .mux-rail-tmpl:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); color: var(--theme-fg, #ccc); }
+#tabby-mux-rail .mux-rail-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 5px;
+    cursor: col-resize;
+    z-index: 10;
+}
+#tabby-mux-rail .mux-rail-resizer:hover,
+#tabby-mux-rail .mux-rail-resizer.dragging {
+    background: var(--theme-primary, #0d6efd);
+}
 `
 
 /**
  * Left session rail - the outermost left element of the window.
  *
- * Injected as the first child of appRoot's `.window` flex container, so it
- * sits to the LEFT of everything else Tabby places there (profile tree, any
- * plugin sidebars) and shrinks the content area by its width; xterm panes
- * refit through their ResizeObserver.
- *
- * The rail shell (headers, search input, buttons) is built once so the
- * search box keeps focus; render() only rewrites the session and template
- * list containers. Right-clicking a session offers save-as-template (and
- * rename/kill); right-clicking a template offers apply/delete.
+ * Rows show the session index as a separate element (configurable) left of
+ * the name; unnamed sessions dynamically display the foreground window's
+ * title. The templates section lives in the status bar / settings - here a
+ * bookmark button next to "new session" mirrors the status bar's behavior.
+ * The right edge is a drag handle resizing the rail (persisted on release).
  */
 @Injectable({ providedIn: 'root' })
 export class MuxSidebarService {
@@ -146,9 +146,6 @@ export class MuxSidebarService {
 
     private rail: HTMLElement | null = null
     private sessionsEl: HTMLElement | null = null
-    private templatesEl: HTMLElement | null = null
-    private searchInput: HTMLInputElement | null = null
-    private searchText = ''
     private started = false
     private renderTimer: any = null
 
@@ -198,36 +195,27 @@ export class MuxSidebarService {
     private mount (host: HTMLElement): void {
         this.rail = document.createElement('div')
         this.rail.id = RAIL_ID
-        // Static shell: rebuilt only here, never during render() - the search
-        // input must survive re-renders to keep focus while typing.
+        // Static shell: rebuilt only here, never during render().
         this.rail.innerHTML =
             `<div class="mux-rail-header"><i class="fas fa-layer-group"></i>` +
             `${escapeHtml(this.i18n.t('mux.rail.header'))}</div>` +
             `<div class="mux-rail-sessions"></div>` +
-            `<div class="mux-rail-templates">` +
-            `<div class="mux-rail-header"><i class="fas fa-bookmark"></i>` +
-            `${escapeHtml(this.i18n.t('mux.tmpl.section'))}` +
-            `<span class="mux-rail-count mux-tpl-count"></span></div>` +
-            `<input class="mux-rail-search" type="text" ` +
-            `placeholder="${escapeHtml(this.i18n.t('mux.tmpl.search'))}">` +
-            `<div class="mux-rail-template-list"></div>` +
-            `</div>` +
+            `<div class="mux-rail-footer">` +
             `<button class="mux-rail-new">` +
-            `<i class="fas fa-plus"></i>${escapeHtml(this.i18n.t('mux.rail.newSession'))}</button>`
+            `<i class="fas fa-plus"></i>${escapeHtml(this.i18n.t('mux.rail.newSession'))}</button>` +
+            `<button class="mux-rail-tmpl"><i class="fas fa-bookmark"></i><span class="mux-tpl-count"></span></button>` +
+            `</div>` +
+            `<div class="mux-rail-resizer"></div>`
 
         // First child = leftmost slot, before the profile tree / any sidebars.
         host.insertBefore(this.rail, host.firstChild)
 
         this.sessionsEl = this.rail.querySelector('.mux-rail-sessions')
-        this.templatesEl = this.rail.querySelector('.mux-rail-template-list')
-        this.searchInput = this.rail.querySelector('.mux-rail-search')
 
         this.rail.addEventListener('click', ev => this.onClick(ev))
         this.rail.addEventListener('contextmenu', ev => this.onContextMenu(ev))
-        this.searchInput?.addEventListener('input', () => {
-            this.searchText = this.searchInput?.value ?? ''
-            this.renderTemplates()
-        })
+        const resizer = this.rail.querySelector('.mux-rail-resizer') as HTMLElement
+        resizer.addEventListener('mousedown', ev => this.startResize(ev, resizer))
 
         this.scheduleRender()
     }
@@ -246,80 +234,46 @@ export class MuxSidebarService {
         if (!this.rail || !this.sessionsEl) {
             return
         }
-        const settings = this.mux.settings.sidebar
-        const show = settings.enabled && this.mux.sessions.length > 0
+        const settings = this.mux.settings
+        const show = settings.sidebar.enabled && this.mux.sessions.length > 0
 
         document.documentElement.style.setProperty(
-            '--mux-rail-w', `${Math.max(80, settings.width)}px`)
+            '--mux-rail-w', `${Math.max(80, settings.sidebar.width)}px`)
         this.rail.classList.toggle('visible', show)
         if (!show) {
             return
         }
 
-        this.renderSessions()
-        this.renderTemplates()
-    }
-
-    private renderSessions (): void {
-        if (!this.sessionsEl) {
-            return
-        }
         const attached = this.mux.attachedSession
+        const showIndex = settings.showSessionIndex
         const parts: string[] = []
-        for (const s of this.mux.sessions) {
+        this.mux.sessions.forEach((s, index) => {
             const isAttached = s === attached
+            const classes = [
+                'mux-rail-session',
+                isAttached ? 'attached' : '',
+            ].filter(Boolean).join(' ')
+            const indexEl = showIndex
+                ? `<span class="mux-rail-index">${index}</span>`
+                : ''
+            const name = escapeHtml(this.mux.sessionDisplayName(s))
             parts.push(
-                `<div class="mux-rail-session ${isAttached ? 'attached' : ''}" ` +
-                `data-session-id="${s.id}" title="${escapeHtml(s.name)}">` +
-                `<i class="fas ${isAttached ? 'fa-circle' : 'fa-circle-thin'}"></i>` +
-                `<span class="mux-rail-name">${escapeHtml(s.name)}</span>` +
+                `<div class="${classes}" data-session-id="${s.id}" title="${name}">` +
+                `${indexEl}` +
+                `<span class="mux-rail-name">${name || '…'}</span>` +
                 `<span class="mux-rail-count">${s.windows.length}</span></div>`)
-        }
+        })
         this.sessionsEl.innerHTML = parts.join('')
-    }
-
-    private renderTemplates (): void {
-        if (!this.rail || !this.templatesEl) {
-            return
-        }
-        const templates = this.mux.templates
-        this.rail.classList.toggle('no-templates', templates.length === 0)
 
         const countEl = this.rail.querySelector('.mux-tpl-count')
+        const templateCount = this.mux.templates.length
         if (countEl) {
-            countEl.textContent = templates.length ? `${templates.length}` : ''
+            countEl.textContent = templateCount ? `${templateCount}` : ''
         }
-
-        // Empty state doubles as the save entry, so the template area is
-        // always discoverable even before the first template exists.
-        if (!templates.length) {
-            this.templatesEl.innerHTML =
-                `<div class="mux-rail-template mux-rail-save-entry" ` +
-                `title="${escapeHtml(this.i18n.t('mux.settings.tplSave'))}">` +
-                `<i class="fas fa-plus"></i>` +
-                `<span class="mux-rail-name">${escapeHtml(this.i18n.t('mux.settings.tplSave'))}</span></div>`
-            return
+        const tmplBtn = this.rail.querySelector('.mux-rail-tmpl') as HTMLElement
+        if (tmplBtn) {
+            tmplBtn.title = this.i18n.t(templateCount ? 'mux.tmpl.browse' : 'mux.settings.tplSave')
         }
-
-        const needle = this.searchText.trim().toLowerCase()
-        const filtered = needle
-            ? templates.filter(t => t.name.toLowerCase().includes(needle))
-            : templates
-        if (!filtered.length) {
-            this.templatesEl.innerHTML =
-                `<div class="mux-rail-template" style="cursor:default;opacity:.6">` +
-                `${escapeHtml(this.i18n.t('mux.tmpl.none'))}</div>`
-            return
-        }
-        const parts: string[] = []
-        for (const t of filtered) {
-            parts.push(
-                `<div class="mux-rail-template" data-template-id="${t.id}" ` +
-                `title="${escapeHtml(this.i18n.t('mux.tmpl.apply'))}">` +
-                `<i class="fas fa-bookmark"></i>` +
-                `<span class="mux-rail-name">${escapeHtml(t.name)}</span></div>`)
-        }
-        this.templatesEl.innerHTML = parts.join('')
     }
 
     private onClick (ev: MouseEvent): void {
@@ -331,15 +285,11 @@ export class MuxSidebarService {
             void this.mux.createSessionWithWindow()
             return
         }
-        if (target.closest('.mux-rail-save-entry')) {
-            void this.mux.saveSessionAsTemplatePrompt(this.mux.activeSession)
-            return
-        }
-        const templateEl = target.closest('.mux-rail-template') as HTMLElement | null
-        if (templateEl?.dataset['templateId']) {
-            const template = this.mux.templates.find(t => t.id === templateEl.dataset['templateId'])
-            if (template) {
-                void this.mux.createSessionFromTemplate(template)
+        if (target.closest('.mux-rail-tmpl')) {
+            if (this.mux.templates.length) {
+                void this.mux.browseTemplates()
+            } else {
+                void this.mux.saveSessionAsTemplatePrompt(this.mux.activeSession)
             }
             return
         }
@@ -358,15 +308,6 @@ export class MuxSidebarService {
         if (!target) {
             return
         }
-        const templateEl = target.closest('.mux-rail-template') as HTMLElement | null
-        if (templateEl?.dataset['templateId']) {
-            const template = this.mux.templates.find(t => t.id === templateEl.dataset['templateId'])
-            if (template) {
-                ev.preventDefault()
-                this.mux.templateContextMenu(template, ev)
-            }
-            return
-        }
         const sessionEl = target.closest('.mux-rail-session') as HTMLElement | null
         if (sessionEl) {
             const id = sessionEl.dataset['sessionId']
@@ -376,6 +317,35 @@ export class MuxSidebarService {
                 this.mux.sessionContextMenu(session, ev)
             }
         }
+    }
+
+    /** Drag the right edge to resize; width persists on release. */
+    private startResize (ev: MouseEvent, resizer: HTMLElement): void {
+        ev.preventDefault()
+        ev.stopPropagation()
+        const startX = ev.clientX
+        const startWidth = this.rail!.getBoundingClientRect().width
+        const minW = 80
+        const maxW = 400
+        let width = startWidth
+        resizer.classList.add('dragging')
+        document.body.style.cursor = 'col-resize'
+        const onMove = (e: MouseEvent) => {
+            width = Math.min(maxW, Math.max(minW, startWidth + (e.clientX - startX)))
+            document.documentElement.style.setProperty('--mux-rail-w', `${Math.round(width)}px`)
+        }
+        const onUp = () => {
+            resizer.classList.remove('dragging')
+            document.body.style.cursor = ''
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+            if (Math.round(width) !== this.mux.settings.sidebar.width) {
+                this.config.store[CONFIG_KEY].sidebar.width = Math.round(width)
+                void this.config.save()
+            }
+        }
+        document.addEventListener('mousemove', onMove)
+        document.addEventListener('mouseup', onUp)
     }
 }
 

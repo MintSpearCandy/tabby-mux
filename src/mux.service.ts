@@ -158,11 +158,16 @@ export class MuxService {
     // Session operations
     // ==================================================================
 
+    /**
+     * New sessions are unnamed by default - the index is displayed as a
+     * separate element and the display title falls back to the foreground
+     * window's title, so numbers never get baked into the name.
+     */
     newSession (name?: string | null): MuxSession {
-        const finalName = this.uniqueSessionName(name ?? this.settings.defaultSessionName)
+        const requested = (name ?? this.settings.defaultSessionName ?? '').trim()
         const session: MuxSession = {
             id: `s${this.sessionSeq++}`,
-            name: finalName,
+            name: requested,
             createdAt: Date.now(),
             windows: [],
             currentWindowIndex: -1,
@@ -173,15 +178,22 @@ export class MuxService {
         return session
     }
 
-    private uniqueSessionName (requested: string | null): string {
-        if (requested) {
-            return requested
+    /** Display position of a session (0-based, per the rail / status bar). */
+    sessionIndex (session: MuxSession): number {
+        return this.sessions.indexOf(session)
+    }
+
+    /**
+     * Named sessions show their name; unnamed ones dynamically show the
+     * foreground window's title (live - title changes re-render the bars).
+     */
+    sessionDisplayName (session: MuxSession): string {
+        const named = (session.name ?? '').trim()
+        if (named) {
+            return named
         }
-        let name = `${this.sessionSeq}`
-        while (this.sessions.some(s => s.name === name)) {
-            name = `${++this.sessionSeq}`
-        }
-        return name
+        const win = session.windows[Math.max(0, session.currentWindowIndex)] ?? session.windows[0]
+        return win ? this.windowTitle(win) : ''
     }
 
     async createSessionWithWindow (name?: string | null): Promise<MuxSession> {
@@ -594,7 +606,7 @@ export class MuxService {
         if (!session) {
             return null
         }
-        const result = await this.promptText('mux.templatePrompt', session.name)
+        const result = await this.promptText('mux.templatePrompt', this.sessionDisplayName(session))
         if (result === null) {
             return null
         }
@@ -802,7 +814,7 @@ export class MuxService {
         for (const session of this.sessions) {
             session.windows.forEach((win, i) => {
                 options.push({
-                    name: `${this.i18n.t('mux.edit.window', { n: i + 1 })} · ${session.name}`,
+                    name: `${this.i18n.t('mux.edit.window', { n: i + 1 })} · ${this.sessionDisplayName(session)}`,
                     description: this.windowTitle(win),
                     icon: 'fas fa-window-maximize',
                     result: win,

@@ -103,6 +103,8 @@ export interface MuxSessionTemplate {
 export interface MuxSettings {
     statusBar: MuxStatusBarConfig
     sidebar: MuxSidebarConfig
+    /** Show the session index as a separate element (rail rows, status bar chips). */
+    showSessionIndex: boolean
     /** Saved session templates (whole-array assignment persists, see MuxService). */
     templates: MuxSessionTemplate[]
     /** Explicitly created template groups (may be empty of templates). */
@@ -111,7 +113,7 @@ export interface MuxSettings {
     collapsedGroups: string[]
     /** Adopt top-level terminal tabs opened outside the plugin into the active session. */
     autoAdoptWindows: boolean
-    /** Name for auto-created sessions; null = sequential numbers like tmux (0, 1, 2...). */
+    /** Name for auto-created sessions; null = unnamed (index shown separately, title falls back to the window title). */
     defaultSessionName: string | null
     /** Profile id used for new windows; null = inherit focused pane, then first local profile. */
     newWindowProfile: string | null
@@ -134,6 +136,7 @@ export function defaultMuxSettings (): MuxSettings {
             resourceIntervalMs: 2000,
         },
         sidebar: { enabled: true, width: 150 },
+        showSessionIndex: true,
         templates: [],
         templateGroups: [],
         collapsedGroups: [],

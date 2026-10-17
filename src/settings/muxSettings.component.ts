@@ -353,6 +353,15 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.showSessionIndex') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-show-index"
+                                       [(ngModel)]="settings.showSessionIndex" (ngModelChange)="save()">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mux-form-line">
                         <div class="mux-line-header"><div class="title">{{ t('mux.settings.railWidth') }}</div></div>
                         <div class="mux-line-control">
                             <input type="number" class="form-control" id="mux-rail-width" min="80" max="400"

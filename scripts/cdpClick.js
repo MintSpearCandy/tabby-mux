@@ -33,6 +33,11 @@ async function main () {
 
     let x, y
     ws.onopen = async () => {
+        // Synthetic mouse input is dropped when the widget is not front-most
+        // (e.g. after restarts with other windows on top) - bring to front
+        // before dispatching.
+        ws.send(JSON.stringify({ id: 99, method: 'Page.bringToFront', params: {} }))
+        await new Promise(r => setTimeout(r, 300))
         try {
             if (arg === '--selector') {
                 const selector = process.argv[3]

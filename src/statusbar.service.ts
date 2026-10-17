@@ -39,6 +39,11 @@ const STYLE = `
     cursor: pointer;
 }
 #tabby-mux-statusbar .mux-session-chip i { font-size: 11px; opacity: .8; }
+#tabby-mux-statusbar .mux-chip-index {
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    opacity: .75;
+}
 #tabby-mux-statusbar .mux-session-chip:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
 #tabby-mux-statusbar .mux-session-chip.attached {
     font-weight: 600;
@@ -227,19 +232,24 @@ export class MuxStatusbarService {
         const parts: string[] = []
 
         // ---- session chips (attach switcher) ----
-        for (const s of this.mux.sessions) {
+        const showIndex = this.mux.settings.showSessionIndex
+        this.mux.sessions.forEach((s, index) => {
             const isAttached = s === (this.mux.attachedSession ?? session)
             const classes = [
                 'mux-session-chip',
                 isAttached ? 'attached' : 'detached',
             ].join(' ')
-            const label = escapeHtml(s.name) +
+            const display = this.mux.sessionDisplayName(s)
+            const indexEl = showIndex
+                ? `<span class="mux-chip-index">${index}</span>`
+                : ''
+            const label = escapeHtml(display) +
                 (isAttached || s.windows.length === 1 ? '' : ` (${s.windows.length})`)
             parts.push(
                 `<span class="${classes}" data-session-id="${s.id}" ` +
-                `title="${escapeHtml(this.i18n.t('mux.statusbar.session', { name: s.name }))}">` +
-                `<i class="fas fa-layer-group"></i>${label}</span>`)
-        }
+                `title="${escapeHtml(this.i18n.t('mux.statusbar.session', { name: display }))}">` +
+                `<i class="fas fa-layer-group"></i>${indexEl}${label}</span>`)
+        })
 
         // ---- right side: pane info + system resources ----
         const right: string[] = []
