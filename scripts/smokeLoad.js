@@ -75,6 +75,7 @@ const stubs = {
     }),
     'tabby-settings': strictProxy('tabby-settings', {
         SettingsTabProvider: stubClass('SettingsTabProvider'),
+        EditProfileModalComponent: stubClass('EditProfileModalComponent'),
     }),
     'os': { cpus: () => [], freemem: () => 0, totalmem: () => 1 },
     '@angular/cdk/drag-drop': {

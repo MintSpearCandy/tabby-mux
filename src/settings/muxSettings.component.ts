@@ -1,6 +1,7 @@
 import { CdkDragDrop, moveItemInArray } from '@angular/cdk/drag-drop'
 import { ChangeDetectorRef, Component, OnDestroy, OnInit, TemplateRef, ViewChild } from '@angular/core'
 import { ConfigService, MenuItemOptions, PlatformService, ProfilesService } from 'tabby-core'
+import { EditProfileModalComponent } from 'tabby-settings'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { Subscription } from 'rxjs'
 import { I18n } from '../i18n'
@@ -226,7 +227,7 @@ import {
                     </div>
 
                     <div class="d-flex flex-column my-3 p-2 mux-collapse-container">
-                        <ng-container *ngFor="let grp of templateGroups">
+                        <ng-container *ngFor="let grp of templateGroups; trackBy: trackGroupByName">
                             <div class="mux-collapse-item d-flex align-items-center p-1"
                                  (click)="toggleGroupCollapse(grp.name)">
                                 <i class="fa fa-fw far" [class.fa-folder]="grp.collapsed"
@@ -244,7 +245,7 @@ import {
                                 </button>
                             </div>
                             <ng-container *ngIf="!grp.collapsed">
-                                <div *ngFor="let tpl of filteredTemplates(grp.templates)"
+                                <div *ngFor="let tpl of filteredTemplates(grp.templates); trackBy: trackTemplateById"
                                      class="mux-collapse-item d-flex align-items-center p-1 ps-4"
                                      (click)="openEditor(tpl)">
                                     <i class="fas fa-fw fa-layer-group ms-1"></i>
@@ -475,50 +476,6 @@ import {
             </div>
         </ng-template>
 
-        <!-- ==================== pane config modal ==================== -->
-        <ng-template #paneTpl>
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="fas fa-terminal me-2"></i>{{ t('mux.paneModal.title') }}</h5>
-                <button type="button" class="btn-close" (click)="paneModalRef?.dismiss()"></button>
-            </div>
-            <div class="modal-body" *ngIf="selectedPaneSpec?.profile as pf">
-                <div class="text-muted mb-3" style="font-size: 12px">{{ t('mux.paneModal.hint') }}</div>
-                <div class="mux-inline-field mb-2">
-                    <label>{{ t('mux.ge.paneName') }}</label>
-                    <input type="text" class="form-control form-control-sm" style="width: 280px"
-                           [(ngModel)]="pf.name" (ngModelChange)="dirty = true">
-                </div>
-                <div class="mux-inline-field mb-2" *ngIf="pf.type === 'local'">
-                    <label>{{ t('mux.ge.command') }}</label>
-                    <input type="text" class="form-control form-control-sm" style="width: 340px"
-                           [(ngModel)]="pf.options.command" (ngModelChange)="dirty = true">
-                </div>
-                <div class="mux-inline-field mb-2" *ngIf="pf.type === 'local'">
-                    <label>{{ t('mux.ge.cwd') }}</label>
-                    <input type="text" class="form-control form-control-sm" style="width: 340px"
-                           [(ngModel)]="pf.options.cwd" (ngModelChange)="dirty = true">
-                </div>
-                <hr>
-                <div class="mux-inline-field">
-                    <label>{{ t('mux.ge.promote') }}</label>
-                    <input type="text" class="form-control form-control-sm" style="width: 220px"
-                           [placeholder]="t('mux.ge.promoteName')" maxlength="60" [(ngModel)]="promoteName">
-                    <button type="button" class="btn btn-sm btn-outline-primary"
-                            [disabled]="!promoteName.trim()" (click)="promoteSelected()">
-                        <i class="fas fa-upload me-1"></i>{{ t('mux.paneModal.saveAs') }}
-                    </button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-sm btn-secondary" (click)="paneModalRef?.dismiss()">
-                    {{ t('mux.paneModal.cancel') }}
-                </button>
-                <button type="button" class="btn btn-sm btn-primary" (click)="paneModalRef?.close()">
-                    {{ t('mux.paneModal.save') }}
-                </button>
-            </div>
-        </ng-template>
-
         <!-- recursive layout canvas -->
         <ng-template #nodeTpl let-node let-path="path">
             <ng-container *ngIf="isContainer(node)">
@@ -562,9 +519,7 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     promoteName = ''
 
     @ViewChild('editorTpl', { static: false }) editorTpl?: TemplateRef<any>
-    @ViewChild('paneTpl', { static: false }) paneTpl?: TemplateRef<any>
     private editorModalRef: any = null
-    paneModalRef: any = null
 
     constructor (
         private config: ConfigService,
@@ -590,7 +545,6 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         this.changedSub?.unsubscribe()
         // Static backdrops: an open modal must never outlive this component,
         // or its overlay blocks every click on the settings page.
-        this.paneModalRef?.dismiss()
         this.editorModalRef?.dismiss()
     }
 
@@ -639,6 +593,21 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
             return list
         }
         return list.filter(tpl => tpl.name.toLowerCase().includes(needle))
+    }
+
+    /**
+     * The app runs change detection at a high frequency; without stable
+     * trackBy identities the getter's fresh object arrays made the ngFor
+     * tear down and rebuild its DOM ~40x/s, which replaced nodes between
+     * mousedown and mouseup and prevented Chromium from synthesizing
+     * click events at all (dead clicks on rows and group headers).
+     */
+    trackGroupByName (_index: number, grp: { name: string }): string {
+        return grp.name
+    }
+
+    trackTemplateById (_index: number, tpl: MuxSessionTemplate): string {
+        return tpl.id
     }
 
     t (key: string, params?: Record<string, any>): string {
@@ -1031,6 +1000,7 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         event.stopPropagation()
         this.selectedPath = [...path]
         this.promoteName = ''
+        const pane = this.selectedPaneSpec
         const items: MenuItemOptions[] = [
             { label: this.t('mux.ge.splitH'), click: () => this.splitSelected('h') },
             { label: this.t('mux.ge.splitV'), click: () => this.splitSelected('v') },
@@ -1040,6 +1010,12 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
             { type: 'separator' },
             { label: this.t('mux.ge.assignProfile') + '…', click: () => void this.assignProfile() },
         ]
+        if (pane?.profile) {
+            items.push({
+                label: this.t('mux.paneModal.saveAs') + '…',
+                click: () => void this.promoteSelectedWithPrompt(),
+            })
+        }
         this.platform.popupContextMenu(items, event)
     }
 
@@ -1058,11 +1034,13 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
     }
 
     /**
-     * Corner edit button: opens the pane's config in its own modal.
-     * References fork on open - saving stores an independent copy with the
-     * template; promoting to the global registry is an explicit action.
+     * Corner edit button: opens the NATIVE connection/profile editor for the
+     * pane's config (same modal the profiles page uses). Cancelling or
+     * saving without changes keeps the pane exactly as it was (pure
+     * reference stays a reference); only a modified save stores an
+     * independent copy with the template.
      */
-    openPaneEditor (event: MouseEvent, path: number[]): void {
+    async openPaneEditor (event: MouseEvent, path: number[]): Promise<void> {
         event.stopPropagation()
         this.selectedPath = [...path]
         this.promoteName = ''
@@ -1070,34 +1048,46 @@ export class MuxSettingsComponent implements OnInit, OnDestroy {
         if (!pane) {
             return
         }
-        if (pane.profileId) {
-            this.forkSelected()
-        }
-        this.paneModalRef = this.ngb.open(this.paneTpl!, { size: 'lg' })
-    }
-
-    forkSelected (): void {
-        const pane = this.selectedPaneSpec
-        if (!pane || !pane.profileId) {
+        const current = pane.profileId
+            ? this.profiles.find(p => p.id === pane.profileId) ?? null
+            : pane.profile
+        if (!current) {
             return
         }
-        const registryProfile = this.profiles.find(p => p.id === pane.profileId)
-        pane.profile = deepClone(registryProfile ?? { name: pane.profileId, options: {} })
-        delete pane.profile.icon
+        const provider = this.profilesService.providerForProfile(current)
+        if (!provider) {
+            return
+        }
+        const modal = this.ngb.open(EditProfileModalComponent, { size: 'lg' })
+        modal.componentInstance.partialProfile = deepClone(current)
+        modal.componentInstance.profileProvider = provider
+        const result = await modal.result.catch(() => null)
+        if (!result) {
+            return // dismissed / cancelled
+        }
+        result.type = provider.id
+        if (JSON.stringify(result) === JSON.stringify(deepClone(current))) {
+            return // saved without changes - keep the reference semantics
+        }
+        delete result.icon
+        pane.profile = result
         pane.profileId = null
         this.dirty = true
     }
 
-    async promoteSelected (): Promise<void> {
+    /** Explicit "save back to registry" action (pane context menu). */
+    async promoteSelectedWithPrompt (): Promise<void> {
         const pane = this.selectedPaneSpec
         if (!pane || !pane.profile) {
             return
         }
-        await this.mux.promotePaneProfile(pane, this.promoteName)
-        this.promoteName = ''
+        const name = await this.mux.promptForText('mux.ge.promoteName', pane.profile.name ?? '')
+        if (name === null || !name.trim()) {
+            return
+        }
+        await this.mux.promotePaneProfile(pane, name)
         this.profiles = await this.profilesService.getProfiles()
         this.dirty = true
-        this.paneModalRef?.close()
     }
 
     // ==================================================================
