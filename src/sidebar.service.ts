@@ -78,6 +78,7 @@ const STYLE = `
 }
 #tabby-mux-rail .mux-rail-footer {
     display: flex;
+    flex-wrap: nowrap;
     align-items: stretch;
     gap: 4px;
     margin: 4px;
@@ -97,6 +98,7 @@ const STYLE = `
     align-items: center;
     justify-content: center;
     gap: 6px;
+    white-space: nowrap;
 }
 #tabby-mux-rail .mux-rail-new:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); color: var(--theme-fg, #ccc); }
 #tabby-mux-rail .mux-rail-tmpl {
@@ -111,6 +113,7 @@ const STYLE = `
     align-items: center;
     gap: 4px;
     font-size: 12px;
+    white-space: nowrap;
 }
 #tabby-mux-rail .mux-rail-tmpl:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); color: var(--theme-fg, #ccc); }
 #tabby-mux-rail .mux-rail-resizer {
@@ -238,7 +241,7 @@ export class MuxSidebarService {
         const show = settings.sidebar.enabled && this.mux.sessions.length > 0
 
         document.documentElement.style.setProperty(
-            '--mux-rail-w', `${Math.max(80, settings.sidebar.width)}px`)
+            '--mux-rail-w', `${Math.max(160, settings.sidebar.width)}px`)
         this.rail.classList.toggle('visible', show)
         if (!show) {
             return
@@ -325,7 +328,8 @@ export class MuxSidebarService {
         ev.stopPropagation()
         const startX = ev.clientX
         const startWidth = this.rail!.getBoundingClientRect().width
-        const minW = 80
+        // Keep the footer's "new session" + template buttons on one line.
+        const minW = 160
         const maxW = 400
         let width = startWidth
         resizer.classList.add('dragging')

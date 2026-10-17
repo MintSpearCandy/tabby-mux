@@ -30,6 +30,13 @@ const STYLE = `
     cursor: default;
 }
 #tabby-mux-statusbar.visible { display: flex; }
+#tabby-mux-statusbar .mux-sessions {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
+    overflow: hidden;
+    flex: 0 1 auto;
+}
 #tabby-mux-statusbar .mux-session-chip {
     display: inline-flex;
     align-items: center;
@@ -37,6 +44,13 @@ const STYLE = `
     padding: 3px 8px;
     border-radius: 3px;
     cursor: pointer;
+    min-width: 0;
+    overflow: hidden;
+}
+#tabby-mux-statusbar .mux-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 #tabby-mux-statusbar .mux-session-chip i { font-size: 11px; opacity: .8; }
 #tabby-mux-statusbar .mux-chip-index {
@@ -51,13 +65,14 @@ const STYLE = `
     color: var(--theme-primary-fg, #fff);
 }
 #tabby-mux-statusbar .mux-session-chip.detached { color: var(--theme-fg-more, #999); }
-#tabby-mux-statusbar .mux-spacer { flex: 1; }
+#tabby-mux-statusbar .mux-spacer { flex: 1 1 auto; min-width: 8px; }
 #tabby-mux-statusbar .mux-info {
     display: inline-flex;
     align-items: center;
     gap: 10px;
     color: var(--theme-fg-more, #999);
     padding: 3px 2px;
+    flex-shrink: 0;
 }
 #tabby-mux-statusbar .mux-info .mux-zoomed { color: var(--theme-warning, #f0ad4e); }
 #tabby-mux-statusbar .mux-info .mux-stat { display: inline-flex; align-items: center; gap: 4px; }
@@ -71,6 +86,7 @@ const STYLE = `
     border-radius: 3px;
     color: var(--theme-fg-more, #999);
     cursor: pointer;
+    flex-shrink: 0;
 }
 #tabby-mux-statusbar .mux-tmpl-btn:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
 #tabby-mux-statusbar .mux-tmpl-btn i { font-size: 11px; }
@@ -231,8 +247,10 @@ export class MuxStatusbarService {
     private buildHtml (session: any): string {
         const parts: string[] = []
 
-        // ---- session chips (attach switcher) ----
+        // ---- session chips (attach switcher), in a shrinkable container
+        // so long/many names compress instead of pushing the right side out
         const showIndex = this.mux.settings.showSessionIndex
+        const chips: string[] = []
         this.mux.sessions.forEach((s, index) => {
             const isAttached = s === (this.mux.attachedSession ?? session)
             const classes = [
@@ -245,11 +263,13 @@ export class MuxStatusbarService {
                 : ''
             const label = escapeHtml(display) +
                 (isAttached || s.windows.length === 1 ? '' : ` (${s.windows.length})`)
-            parts.push(
+            chips.push(
                 `<span class="${classes}" data-session-id="${s.id}" ` +
                 `title="${escapeHtml(this.i18n.t('mux.statusbar.session', { name: display }))}">` +
-                `<i class="fas fa-layer-group"></i>${indexEl}${label}</span>`)
+                `<i class="fas fa-layer-group"></i>${indexEl}` +
+                `<span class="mux-chip-label">${label}</span></span>`)
         })
+        parts.push(`<span class="mux-sessions">${chips.join('')}</span>`)
 
         // ---- right side: pane info + system resources ----
         const right: string[] = []
