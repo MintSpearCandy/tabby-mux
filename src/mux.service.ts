@@ -784,26 +784,35 @@ export class MuxService {
 
     /**
      * Boot migration: templates saved in the legacy recovery-token format
-     * are converted to layout specs once.
+     * are converted to layout specs once. Never throws - a malformed entry
+     * is skipped rather than failing startup.
      */
     private async migrateTemplates (): Promise<void> {
-        let changed = false
-        const registry = await this.profiles.getProfiles()
-        const migrated = this.templates.map(tpl => {
-            const isLegacy = tpl.windows?.some((w: any) => w?.type === 'app:split-tab' || w?.layout === undefined)
-            if (!isLegacy) {
-                return tpl
+        try {
+            let changed = false
+            const registry = await this.profiles.getProfiles()
+            const migrated = this.templates.map(tpl => {
+                try {
+                    const isLegacy = tpl.windows?.some((w: any) => w?.type === 'app:split-tab' || w?.layout === undefined)
+                    if (!isLegacy) {
+                        return tpl
+                    }
+                    changed = true
+                    return {
+                        ...tpl,
+                        windows: (tpl.windows ?? []).map((w: any) => w?.layout ? w : tokenToSpec(w, registry)),
+                    }
+                } catch {
+                    return tpl
+                }
+            })
+            if (changed) {
+                this.config.store[CONFIG_KEY].templates = migrated
+                await this.config.save()
+                this.changed$.next()
             }
-            changed = true
-            return {
-                ...tpl,
-                windows: (tpl.windows ?? []).map((w: any) => w?.layout ? w : tokenToSpec(w, registry)),
-            }
-        })
-        if (changed) {
-            this.config.store[CONFIG_KEY].templates = migrated
-            await this.config.save()
-            this.changed$.next()
+        } catch {
+            // migration is best-effort
         }
     }
 
@@ -990,11 +999,29 @@ export class MuxService {
         this.app.activeTabChange$.subscribe(tab => this.trackActiveWindow(tab))
         this.config.changed$.subscribe(() => this.applyIsolationSetting())
 
-        void this.migrateTemplates()
-
-        this.applyIsolationSetting()
-        this.injector.get(MuxStatusbarService).start()
-        this.injector.get(MuxSidebarService).start()
+        // Boot-time helpers must never take the whole plugin (and with it
+        // the app) down - a malformed persisted template is data, not a
+        // reason to fail startup.
+        try {
+            void this.migrateTemplates()
+        } catch {
+            // ignore - templates stay in whatever form they are in
+        }
+        try {
+            this.applyIsolationSetting()
+        } catch {
+            // fall back to whatever the tab bar looks like now
+        }
+        try {
+            this.injector.get(MuxStatusbarService).start()
+        } catch {
+            // status bar is cosmetic
+        }
+        try {
+            this.injector.get(MuxSidebarService).start()
+        } catch {
+            // rail is cosmetic
+        }
 
         this.changed$.next()
     }
