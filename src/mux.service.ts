@@ -735,10 +735,34 @@ export class MuxService {
             } catch {
                 filled = false
             }
+            if (filled) {
+                // Load in window order: window N's shells must be live
+                // before window N+1 starts spawning, so the visible loading
+                // (spawn burst, tab titles resolving) follows the window
+                // order from the first window instead of overlapping.
+                await this.waitPanesSpawned(split)
+            }
             ;(split as any).setCustomTitle?.('')
             if (!filled && session.windows.some(w => w.tab === split)) {
                 split.destroy()
             }
+        }
+    }
+
+    /**
+     * Waits until every pane of the window has a session object. For local
+     * profiles the pty spawn happens synchronously (ipc sendSync) inside
+     * session creation, so this gate serializes the shell-spawn load window
+     * by window. Bounded: a pane that never initializes (broken profile)
+     * must not block later windows forever.
+     */
+    private async waitPanesSpawned (split: SplitTabComponent, timeoutMs = 10_000): Promise<void> {
+        const deadline = Date.now() + timeoutMs
+        while (Date.now() < deadline) {
+            if (!split.getAllTabs().some(t => !(t as any).session)) {
+                return
+            }
+            await new Promise(resolve => setTimeout(resolve, 100))
         }
     }
 
@@ -799,12 +823,38 @@ export class MuxService {
         }
         split.root = tree
         split.layout()
-        const first = tree.getAllTabs()[0]
-        if (first) {
-            split.focus(first)
-        }
+        await this.activatePanes(split)
         ;(split as any).updateTitle?.()
         return true
+    }
+
+    /**
+     * A terminal pane attaches its frontend (and with it the ResizeObserver
+     * -> resize -> frontendReady -> session spawn chain) only when it is or
+     * becomes focused - baseTerminalTab.component.ts defers attach until the
+     * pane's first focused$ emission. The host's own split path focuses every
+     * pane as it is added; a spec fill builds the tree directly, so without
+     * this sweep every pane except the first would stay frontend-less (blank
+     * and session-less) until clicked. Re-focuses pending panes until all
+     * frontends report ready (retries absorb change-detection timing), then
+     * focuses the first pane like the host does.
+     */
+    private async activatePanes (split: SplitTabComponent, timeoutMs = 8_000): Promise<void> {
+        const panes = split.getAllTabs()
+        const deadline = Date.now() + timeoutMs
+        while (Date.now() < deadline) {
+            const pending = panes.filter(t => !(t as any).frontendIsReady)
+            if (!pending.length) {
+                break
+            }
+            for (const pane of pending) {
+                split.focus(pane)
+            }
+            await new Promise(resolve => setTimeout(resolve, 150))
+        }
+        if (panes.length) {
+            split.focus(panes[0])
+        }
     }
 
     async deleteTemplate (template: MuxSessionTemplate): Promise<void> {
