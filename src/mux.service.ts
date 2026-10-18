@@ -285,6 +285,24 @@ export class MuxService {
      * ngOnChanges re-inserts the view so the terminal renders again.
      */
     attachSession (session: MuxSession): void {
+        this.relistSessionWindows(session)
+        this.attachedSessionId = session.id
+        const current = session.windows[Math.max(0, session.currentWindowIndex)]
+        if (current) {
+            this.app.selectTab(current.tab)
+        }
+        this.moveForeignTabsToTail()
+        this.changed$.next()
+    }
+
+    /**
+     * Restores the listing invariant for `session`: un-lists every other
+     * session's windows and lists `session`'s. Returns whether the tab bar
+     * changed at all - callers use this to distinguish "nothing to do" from
+     * an actual heal. Never touches the selection.
+     */
+    private relistSessionWindows (session: MuxSession): boolean {
+        let mutated = false
         for (const other of this.sessions) {
             if (other === session) {
                 continue
@@ -293,21 +311,17 @@ export class MuxService {
                 const index = this.app.tabs.indexOf(win.tab)
                 if (index !== -1) {
                     this.app.removeTab(win.tab)
+                    mutated = true
                 }
             }
         }
-        this.attachedSessionId = session.id
         for (const win of session.windows) {
             if (!this.app.tabs.includes(win.tab)) {
                 this.app.addTabRaw(win.tab)
+                mutated = true
             }
         }
-        const current = session.windows[Math.max(0, session.currentWindowIndex)]
-        if (current) {
-            this.app.selectTab(current.tab)
-        }
-        this.moveForeignTabsToTail()
-        this.changed$.next()
+        return mutated
     }
 
     /** Mode-aware session switch (status bar chips, switch-session commands). */
@@ -355,10 +369,21 @@ export class MuxService {
             if (!keep) {
                 return
             }
-            // attachSession sweeps every other session's windows off the bar
-            // (covers the mixed -> isolated transition where several
-            // sessions' tabs are listed at once) and re-lists keep's.
-            this.attachSession(keep)
+            if (this.attachedSessionId !== keep.id) {
+                // Real attach switch: full attach, selection included.
+                this.attachSession(keep)
+                return
+            }
+            // Reconcile of the ALREADY-attached session - this runs on every
+            // config.changed$, i.e. on every settings tweak. Restore the
+            // listing invariant but keep the selection: the user may well be
+            // on the settings/welcome page, and re-selecting the session's
+            // current window yanked them away on every save (2026-10-18
+            // regression from the attachSession rewrite).
+            if (this.relistSessionWindows(keep)) {
+                this.moveForeignTabsToTail()
+                this.changed$.next()
+            }
         } else {
             // Mixed mode: every session's windows are listed.
             for (const session of this.sessions) {
