@@ -39,6 +39,8 @@ import {
         }
         .mux-form-line .mux-line-header { flex: 1; min-width: 0; }
         .mux-form-line .mux-line-header .title { font-size: 13px; }
+        /* Native spec: app/src/global.scss .form-line .header .description */
+        .mux-form-line .mux-line-header .description { font-size: 13px; opacity: .5; margin-top: 2px; }
         .mux-form-line .mux-line-control { width: 220px; flex-shrink: 0; }
         .mux-form-line .form-check { margin: 0; }
         .mux-section-title {
@@ -292,7 +294,7 @@ import {
                 <ng-template ngbNavContent>
                     <div class="mux-section-title">{{ t('mux.settings.sectionStatusbar') }}</div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div><div class="description">{{ t('mux.settings.sbEnabled.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-sb-enabled"
@@ -301,7 +303,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbPaneInfo') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbPaneInfo') }}</div><div class="description">{{ t('mux.settings.sbPaneInfo.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-sb-pane"
@@ -310,7 +312,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbCpu') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbCpu') }}</div><div class="description">{{ t('mux.settings.sbCpu.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-sb-cpu"
@@ -319,7 +321,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbMem') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbMem') }}</div><div class="description">{{ t('mux.settings.sbMem.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-sb-mem"
@@ -328,14 +330,14 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbHeight') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbHeight') }}</div><div class="description">{{ t('mux.settings.sbHeight.desc') }}</div></div>
                         <div class="mux-line-control">
                             <input type="number" class="form-control" id="mux-sb-height" min="14" max="80"
                                    [(ngModel)]="settings.statusBar.height" (ngModelChange)="save()">
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbInterval') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbInterval') }}</div><div class="description">{{ t('mux.settings.sbInterval.desc') }}</div></div>
                         <div class="mux-line-control">
                             <input type="number" class="form-control" id="mux-sb-interval" min="500" step="100"
                                    [(ngModel)]="settings.statusBar.resourceIntervalMs" (ngModelChange)="save()">
@@ -344,7 +346,7 @@ import {
 
                     <div class="mux-section-title">{{ t('mux.settings.sectionSidebar') }}</div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div><div class="description">{{ t('mux.settings.railEnabled.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-rail-enabled"
@@ -353,7 +355,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.showSessionIndex') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.showSessionIndex') }}</div><div class="description">{{ t('mux.settings.showSessionIndex.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-show-index"
@@ -362,7 +364,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railWidth') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.railWidth') }}</div><div class="description">{{ t('mux.settings.railWidth.desc') }}</div></div>
                         <div class="mux-line-control">
                             <input type="number" class="form-control" id="mux-rail-width" min="80" max="400"
                                    [(ngModel)]="settings.sidebar.width" (ngModelChange)="save()">
@@ -371,7 +373,7 @@ import {
 
                     <div class="mux-section-title">{{ t('mux.settings.sectionSessions') }}</div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div><div class="description">{{ t('mux.settings.isolated.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-isolated"
@@ -380,7 +382,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.autoAdopt') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.autoAdopt') }}</div><div class="description">{{ t('mux.settings.autoAdopt.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-adopt"
@@ -389,7 +391,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.foreignTabsToTail') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.foreignTabsToTail') }}</div><div class="description">{{ t('mux.settings.foreignTabsToTail.desc') }}</div></div>
                         <div class="mux-line-control">
                             <div class="form-check form-switch">
                                 <input type="checkbox" class="form-check-input" id="mux-foreign-tail"
@@ -398,7 +400,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.defaultName') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.defaultName') }}</div><div class="description">{{ t('mux.settings.defaultName.desc') }}</div></div>
                         <div class="mux-line-control">
                             <input type="text" class="form-control" id="mux-default-name" maxlength="40"
                                    [ngModel]="settings.defaultSessionName ?? ''"
@@ -406,7 +408,7 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
-                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.profile') }}</div></div>
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.profile') }}</div><div class="description">{{ t('mux.settings.profile.desc') }}</div></div>
                         <div class="mux-line-control">
                             <select class="form-select" id="mux-profile"
                                     [ngModel]="settings.newWindowProfile ?? ''"
