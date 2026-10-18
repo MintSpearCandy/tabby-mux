@@ -43,15 +43,6 @@ import {
         .mux-form-line .mux-line-header .description { font-size: 13px; opacity: .5; margin-top: 2px; }
         .mux-form-line .mux-line-control { width: 220px; flex-shrink: 0; }
         .mux-form-line .form-check { margin: 0; }
-        .mux-section-title {
-            font-size: 12px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .5px;
-            color: var(--theme-fg-more, #999);
-            margin: 18px 0 6px;
-        }
-        .mux-section-title:first-child { margin-top: 0; }
         /* collapse list - copied from profilesSettingsTab.component.scss
            (native classes are scoped to their components) */
         .mux-collapse-container {
@@ -292,7 +283,7 @@ import {
             <li ngbNavItem>
                 <a ngbNavLink>{{ t('mux.settings.tabGeneral') }}</a>
                 <ng-template ngbNavContent>
-                    <div class="mux-section-title">{{ t('mux.settings.sectionStatusbar') }}</div>
+                    <h3 class="mb-3">{{ t('mux.settings.sectionStatusbar') }}</h3>
                     <div class="mux-form-line">
                         <div class="mux-line-header"><div class="title">{{ t('mux.settings.sbEnabled') }}</div><div class="description">{{ t('mux.settings.sbEnabled.desc') }}</div></div>
                         <div class="mux-line-control">
@@ -344,7 +335,7 @@ import {
                         </div>
                     </div>
 
-                    <div class="mux-section-title">{{ t('mux.settings.sectionSidebar') }}</div>
+                    <h3 class="mb-3">{{ t('mux.settings.sectionSidebar') }}</h3>
                     <div class="mux-form-line">
                         <div class="mux-line-header"><div class="title">{{ t('mux.settings.railEnabled') }}</div><div class="description">{{ t('mux.settings.railEnabled.desc') }}</div></div>
                         <div class="mux-line-control">
@@ -371,7 +362,7 @@ import {
                         </div>
                     </div>
 
-                    <div class="mux-section-title">{{ t('mux.settings.sectionSessions') }}</div>
+                    <h3 class="mb-3">{{ t('mux.settings.sectionSessions') }}</h3>
                     <div class="mux-form-line">
                         <div class="mux-line-header"><div class="title">{{ t('mux.settings.isolated') }}</div><div class="description">{{ t('mux.settings.isolated.desc') }}</div></div>
                         <div class="mux-line-control">
