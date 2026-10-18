@@ -666,54 +666,88 @@ export class MuxService {
     }
 
     /**
-     * Rebuilds a session from a template: fresh shells in the saved layout.
-     * Reference panes resolve their profile at apply time ("连接式直取");
-     * embedded panes use their stored copy.
+     * Rebuilds a session from a template in two phases:
+     *
+     *  1. Synchronously create EVERY window shell (SplitTab + registration).
+     *     No awaits - the full window list appears in the tab bar instantly
+     *     and the session is immediately switchable/renamable. Attaching
+     *     first (isolated mode) keeps every shell listed, so no
+     *     add-then-sweep churn per shell.
+     *  2. Fill the panes one window at a time in the background. Reference
+     *     panes resolve their profile at apply time ("连接式直取"); embedded
+     *     panes use their stored copy.
      */
     async createSessionFromTemplate (template: MuxSessionTemplate): Promise<MuxSession | null> {
-        const session = this.newSession(template.name)
-        for (const windowSpec of template.windows) {
-            const split = await this.buildWindowFromSpec(windowSpec)
-            if (split) {
-                this.registerWindow(session, split)
-            }
-        }
-        if (!session.windows.length) {
-            this.sessions = this.sessions.filter(s => s !== session)
-            this.changed$.next()
+        const specs = template.windows.filter(w => specPanes(w.layout).length)
+        if (!specs.length) {
             return null
         }
+        const session = this.newSession(template.name)
         if (this.isolated) {
             this.attachSession(session)
         }
+        const shells: SplitTabComponent[] = []
+        for (const windowSpec of specs) {
+            const split = this.tabsService.create({ type: SplitTabComponent })
+            // tabOpened$ fires SYNCHRONOUSLY inside addTabRaw, so the
+            // adoption suppression only needs to cover this call.
+            this.suppressAdoption++
+            try {
+                this.app.addTabRaw(split)
+            } finally {
+                this.suppressAdoption--
+            }
+            // Placeholder until the panes exist (cleared after filling);
+            // '' clears the custom title back to the dynamic one.
+            ;(split as any).setCustomTitle?.('…')
+            this.registerWindow(session, split)
+            shells.push(split)
+        }
         this.changed$.next()
+        void this.fillWindowsProgressively(session, specs, shells)
         return session
     }
 
     /**
-     * Constructs one window from a layout spec: creates the SplitTab shell,
-     * lets it render (initialized$), creates one terminal per leaf and
-     * attaches it, then installs a real SplitContainer tree with the
-     * authored orientation/ratios.
+     * Phase 2: fills template shells one window at a time. Panes never pass
+     * through AppService.addTabRaw, so no adoption suppression is needed
+     * here. A shell the user closed meanwhile is skipped; a window whose
+     * panes cannot be built (e.g. profile deleted since the template was
+     * saved) is destroyed rather than left as a zombie empty tab.
      */
-    private async buildWindowFromSpec (spec: MuxWindowSpec): Promise<SplitTabComponent | null> {
+    private async fillWindowsProgressively (
+        session: MuxSession, specs: MuxWindowSpec[], shells: SplitTabComponent[],
+    ): Promise<void> {
+        for (let i = 0; i < shells.length; i++) {
+            const split = shells[i]
+            if (!session.windows.some(w => w.tab === split)) {
+                continue
+            }
+            let filled = false
+            try {
+                filled = await this.fillWindowFromSpec(split, specs[i])
+            } catch {
+                filled = false
+            }
+            ;(split as any).setCustomTitle?.('')
+            if (!filled && session.windows.some(w => w.tab === split)) {
+                split.destroy()
+            }
+        }
+    }
+
+    /**
+     * Populates an already-created window shell from a layout spec: one
+     * terminal per leaf, attached to the split, then a real SplitContainer
+     * tree with the authored orientation/ratios. The shell must have been
+     * listed (its view initializes the subjects this awaits).
+     */
+    private async fillWindowFromSpec (split: SplitTabComponent, spec: MuxWindowSpec): Promise<boolean> {
         const leaves = specPanes(spec.layout)
         if (!leaves.length) {
-            return null
+            return false
         }
-        const registry = await this.profiles.getProfiles()
-        const split = this.tabsService.create({ type: SplitTabComponent })
-        // tabOpened$ fires SYNCHRONOUSLY inside addTabRaw, so the adoption
-        // suppression only needs to cover this call. A long-lived counter
-        // spanning the whole (multi-await) template build would swallow
-        // adoption of tabs the user opens concurrently, leaving them
-        // unmanaged in the tab bar.
-        this.suppressAdoption++
-        try {
-            this.app.addTabRaw(split)
-        } finally {
-            this.suppressAdoption--
-        }
+        const registry = await this.getProfilesCached()
         // addTabRaw rendered the shell only after a change-detection pass;
         // the split engine itself awaits this before attaching views.
         await split.initialized$.toPromise()
@@ -754,9 +788,8 @@ export class MuxService {
             return container
         }
         const tree = buildTree(spec.layout, [])
-        if (!tree || !(tree instanceof SplitContainer)) {
-            split.destroy()
-            return null
+        if (!tree || !(tree instanceof SplitContainer) || !tree.getAllTabs().length) {
+            return false
         }
         split.root = tree
         split.layout()
@@ -765,7 +798,7 @@ export class MuxService {
             split.focus(first)
         }
         ;(split as any).updateTitle?.()
-        return split
+        return true
     }
 
     async deleteTemplate (template: MuxSessionTemplate): Promise<void> {
