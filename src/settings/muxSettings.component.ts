@@ -389,6 +389,15 @@ import {
                         </div>
                     </div>
                     <div class="mux-form-line">
+                        <div class="mux-line-header"><div class="title">{{ t('mux.settings.foreignTabsToTail') }}</div></div>
+                        <div class="mux-line-control">
+                            <div class="form-check form-switch">
+                                <input type="checkbox" class="form-check-input" id="mux-foreign-tail"
+                                       [(ngModel)]="settings.foreignTabsToTail" (ngModelChange)="save()">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mux-form-line">
                         <div class="mux-line-header"><div class="title">{{ t('mux.settings.defaultName') }}</div></div>
                         <div class="mux-line-control">
                             <input type="text" class="form-control" id="mux-default-name" maxlength="40"

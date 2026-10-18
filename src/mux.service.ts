@@ -306,6 +306,7 @@ export class MuxService {
         if (current) {
             this.app.selectTab(current.tab)
         }
+        this.moveForeignTabsToTail()
         this.changed$.next()
     }
 
@@ -318,6 +319,29 @@ export class MuxService {
         const win = session.windows[Math.max(0, session.currentWindowIndex)]
         if (win) {
             this.app.selectTab(win.tab)
+        }
+        this.moveForeignTabsToTail()
+    }
+
+    /**
+     * Moves non-mux top-level tabs (welcome page, settings, ...) behind all
+     * listed windows on session switches - opt-in via settings. Sequential
+     * move-to-end keeps their relative order; moveTabToIndex is a pure
+     * splice + tabsChanged (never touches the active tab) and clamps to pin
+     * bounds, so pinned tabs stay in front (explicit user override).
+     */
+    private moveForeignTabsToTail (): void {
+        if (!this.settings.foreignTabsToTail) {
+            return
+        }
+        // moveTabToIndex exists at runtime (host >= 1.0.237) but is missing
+        // from the tabby-core@1.0.231-nightly typings.
+        const appAny = this.app as any
+        if (typeof appAny.moveTabToIndex !== 'function') {
+            return
+        }
+        for (const tab of this.app.tabs.filter(t => !this.windowByTab.has(t))) {
+            appAny.moveTabToIndex(tab, this.app.tabs.length - 1)
         }
     }
 

@@ -38,6 +38,7 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 - 附着不变式（2026-10-18 加固）：隔离模式下 tab bar 只列附着会话的窗口，靠**三层协同**维持——① `attachSession()` 做**全局清扫**（撤下所有非目标会话的已列出窗口，不是只 detach 前一个附着会话）；② `registerWindow()` 末尾把"注册到非附着会话"的窗口立即软移除（窗口经 `addTabRaw` 落地时会被列出+选中，必须在源头撤下）；③ `createSessionWithWindow()`/`createSessionFromTemplate()` 在**创建完成后**才 attach（预 attach 是竞态：创建在 `await resolveProfile` 处挂起，并发调用的 attachedSessionId 会被改写——高频新建曾因此把每个会话的窗口都漏管滞留在 bar，切换也不清除，2026-10-18 CDP 实测复现+修复）。并发创建的终态 = 最后 attach 者胜，全部窗口归属正确。
 - 后台会话不在 app.tabs → **不进 Tabby 崩溃恢复快照**（重启即失，README 已注明）。
 - detached 窗口的 kill 走 `canClose() + tab.destroy()` 直连（closeTab 只认已列出 tab）；destroy → destroyed$ → addTabRaw 的订阅 → tabRemoved$ → 注册表自清。
+- **外来 tab（欢迎/设置页等非 SplitTab 顶层 tab）**：不领养（tryAdopt 的 instanceof 闸门）、不清出（清扫只碰注册窗口）、切到它们不改变附着状态。可选 `mux.foreignTabsToTail`（默认关）：每次切换会话时把外来 tab 顺序移到所有窗口之后——`moveTabToIndex` 是纯 splice+tabsChanged（不动活动 tab，pinned 被夹在前部，typings 缺失需 `(app as any)`），在 attachSession 尾部与混合模式 switchToSession 各调一次。
 
 ## 已验证的平台坑（2026-10-16 实测，别再踩）
 

@@ -123,6 +123,12 @@ export interface MuxSettings {
      * keep running) and restored when their session is attached.
      */
     isolatedSessions: boolean
+    /**
+     * On every session switch, move non-mux top-level tabs (welcome page,
+     * settings, ...) behind all listed windows. Pinned tabs are exempt
+     * (the host enforces pin ordering).
+     */
+    foreignTabsToTail: boolean
 }
 
 export function defaultMuxSettings (): MuxSettings {
@@ -144,5 +150,6 @@ export function defaultMuxSettings (): MuxSettings {
         defaultSessionName: null,
         newWindowProfile: null,
         isolatedSessions: true,
+        foreignTabsToTail: false,
     }
 }
