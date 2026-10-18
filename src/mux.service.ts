@@ -703,6 +703,12 @@ export class MuxService {
             this.registerWindow(session, split)
             shells.push(split)
         }
+        // addTabRaw selects each shell as it lands, which leaves the LAST
+        // window in the foreground - the tmux semantic is the first window.
+        const first = session.windows[0]
+        if (first) {
+            this.app.selectTab(first.tab)
+        }
         this.changed$.next()
         void this.fillWindowsProgressively(session, specs, shells)
         return session
@@ -1064,6 +1070,13 @@ export class MuxService {
         if (this.isolated && session.id !== this.attachedSessionId &&
             this.app.tabs.includes(tab)) {
             this.app.removeTab(tab)
+        }
+        // addTabRaw APPENDS, so a freshly landed window sits behind foreign
+        // tabs. Every window passes through here (new window, template
+        // shells, adoption) - re-asserting the order here keeps the
+        // foreign-tabs-at-tail invariant without relying on each caller.
+        if (this.app.tabs.includes(tab)) {
+            this.moveForeignTabsToTail()
         }
         this.changed$.next()
         return win
