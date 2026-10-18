@@ -32,10 +32,13 @@ import {
     selector: 'mux-settings',
     styles: [`
         .mux-form-line {
+            /* Native spec: app/src/global.scss .form-line */
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 7px 0;
+            padding: 10px 0;
+            margin: 0;
+            min-height: 64px;
         }
         .mux-form-line .mux-line-header { flex: 1; min-width: 0; }
         .mux-form-line .mux-line-header .title { font-size: 13px; }
