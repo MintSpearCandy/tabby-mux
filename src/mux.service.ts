@@ -70,6 +70,7 @@ export class MuxService {
     private windowSeq = 0
     private suppressAdoption = 0
     private booted = false
+    private profilesCache: { at: number, list: any[] } | null = null
 
     constructor (injector: Injector) {
         this.injector = injector
@@ -197,13 +198,17 @@ export class MuxService {
     }
 
     async createSessionWithWindow (name?: string | null): Promise<MuxSession> {
-        // tmux `new-session`: detach the currently attached session first so
-        // the new session's window opens into an isolated tab bar.
-        if (this.isolated && this.attachedSession) {
-            this.detachSession(this.attachedSession)
-        }
         const session = this.newSession(name)
         await this.newWindow(session)
+        // Attach AFTER the window exists. Attaching up front is racy under
+        // rapid creation: each call suspends in profile resolution, so a
+        // later call rewrites attachedSessionId before this call's window
+        // lands - the window then belongs to a non-attached session and (with
+        // the registerWindow sweep) stays correctly un-listed until this
+        // final attach sweeps the bar and lists it. Last attach wins.
+        if (this.isolated) {
+            this.attachSession(session)
+        }
         return session
     }
 
@@ -267,50 +272,39 @@ export class MuxService {
     // ==================================================================
 
     /**
-     * Soft-removes every window of the session from the tab bar. Components
-     * and terminal sessions stay alive: app.removeTab does not destroy tabs,
-     * and the destroyed tab-body only detaches the host view
-     * (tabBody.component.ts ngOnDestroy -> placeholder.detach()).
-     * tabRemoved$ is NOT emitted by this path (it only fires on destroy), so
-     * the plugin registry stays untouched.
-     */
-    private detachSession (session: MuxSession): void {
-        if (session.id !== this.attachedSessionId) {
-            return
-        }
-        for (const win of [...session.windows]) {
-            const index = this.app.tabs.indexOf(win.tab)
-            if (index !== -1) {
-                this.app.removeTab(win.tab)
-            }
-        }
-        this.attachedSessionId = null
-        this.changed$.next()
-    }
-
-    /**
-     * Attaches a session: detaches the currently attached one (if any) and
-     * re-lists the target session's windows. addTabRaw re-creates a tab-body
-     * per window whose ngOnChanges re-inserts the preserved host view, so the
-     * terminal renders again and its ResizeObserver refits the PTY.
+     * Attaches a session with a FULL sweep: un-lists every other session's
+     * windows, not just the previously attached one. Window creation is
+     * async (profile resolution + PTY spawn), so concurrent
+     * createSessionWithWindow calls can land windows of several sessions in
+     * the bar; sweeping here restores the isolation invariant no matter how
+     * the bar got polluted (2026-10-18: detaching only the previous session
+     * leaked those windows permanently - switching sessions never removed
+     * them). Soft-removal keeps components and terminal sessions alive:
+     * app.removeTab does not destroy tabs, and the destroyed tab-body only
+     * detaches the host view; addTabRaw re-creates a tab-body whose
+     * ngOnChanges re-inserts the view so the terminal renders again.
      */
     attachSession (session: MuxSession): void {
-        const current = this.attachedSession
-        if (current === session) {
-            return
+        for (const other of this.sessions) {
+            if (other === session) {
+                continue
+            }
+            for (const win of [...other.windows]) {
+                const index = this.app.tabs.indexOf(win.tab)
+                if (index !== -1) {
+                    this.app.removeTab(win.tab)
+                }
+            }
         }
-        if (current) {
-            this.detachSession(current)
-        }
+        this.attachedSessionId = session.id
         for (const win of session.windows) {
             if (!this.app.tabs.includes(win.tab)) {
                 this.app.addTabRaw(win.tab)
             }
         }
-        this.attachedSessionId = session.id
-        const win = session.windows[Math.max(0, session.currentWindowIndex)]
-        if (win) {
-            this.app.selectTab(win.tab)
+        const current = session.windows[Math.max(0, session.currentWindowIndex)]
+        if (current) {
+            this.app.selectTab(current.tab)
         }
         this.changed$.next()
     }
@@ -337,26 +331,10 @@ export class MuxService {
             if (!keep) {
                 return
             }
-            // Un-list every other session's windows. Beyond detaching the
-            // previously attached session this also covers the
-            // mixed -> isolated transition, where several sessions' tabs are
-            // in the bar at once.
-            for (const session of this.sessions) {
-                if (session === keep) {
-                    continue
-                }
-                for (const win of session.windows) {
-                    const index = this.app.tabs.indexOf(win.tab)
-                    if (index !== -1) {
-                        this.app.removeTab(win.tab)
-                    }
-                }
-            }
-            if (this.attachedSessionId && this.attachedSessionId !== keep.id) {
-                this.attachedSessionId = null
-            }
+            // attachSession sweeps every other session's windows off the bar
+            // (covers the mixed -> isolated transition where several
+            // sessions' tabs are listed at once) and re-lists keep's.
             this.attachSession(keep)
-            this.changed$.next()
         } else {
             // Mixed mode: every session's windows are listed.
             for (const session of this.sessions) {
@@ -384,15 +362,13 @@ export class MuxService {
 
     /**
      * Opens a new top-level terminal tab and registers it as a window of the
-     * session. Mirrors tmux `new-window`.
+     * session. Mirrors tmux `new-window`. Pure creation: in isolation mode
+     * the window is un-listed right away unless its session is the attached
+     * one (see registerWindow); callers that want the session in view attach
+     * after creating.
      */
     async newWindow (session?: MuxSession, profile?: any): Promise<MuxWindow | null> {
         const targetSession = session ?? this.activeSession ?? this.newSession()
-        if (this.isolated && this.attachedSession !== targetSession) {
-            // Bring the target session into view first so the new window
-            // lands inside an isolated tab bar.
-            this.attachSession(targetSession)
-        }
         const resolved = profile ?? await this.resolveProfile(targetSession)
         if (!resolved) {
             return null
@@ -646,20 +622,12 @@ export class MuxService {
      * embedded panes use their stored copy.
      */
     async createSessionFromTemplate (template: MuxSessionTemplate): Promise<MuxSession | null> {
-        if (this.isolated && this.attachedSession) {
-            this.detachSession(this.attachedSession)
-        }
         const session = this.newSession(template.name)
-        this.suppressAdoption++
-        try {
-            for (const windowSpec of template.windows) {
-                const split = await this.buildWindowFromSpec(windowSpec)
-                if (split) {
-                    this.registerWindow(session, split)
-                }
+        for (const windowSpec of template.windows) {
+            const split = await this.buildWindowFromSpec(windowSpec)
+            if (split) {
+                this.registerWindow(session, split)
             }
-        } finally {
-            this.suppressAdoption--
         }
         if (!session.windows.length) {
             this.sessions = this.sessions.filter(s => s !== session)
@@ -686,7 +654,17 @@ export class MuxService {
         }
         const registry = await this.profiles.getProfiles()
         const split = this.tabsService.create({ type: SplitTabComponent })
-        this.app.addTabRaw(split)
+        // tabOpened$ fires SYNCHRONOUSLY inside addTabRaw, so the adoption
+        // suppression only needs to cover this call. A long-lived counter
+        // spanning the whole (multi-await) template build would swallow
+        // adoption of tabs the user opens concurrently, leaving them
+        // unmanaged in the tab bar.
+        this.suppressAdoption++
+        try {
+            this.app.addTabRaw(split)
+        } finally {
+            this.suppressAdoption--
+        }
         // addTabRaw rendered the shell only after a change-detection pass;
         // the split engine itself awaits this before attaching views.
         await split.initialized$.toPromise()
@@ -939,7 +917,7 @@ export class MuxService {
     private async resolveProfile (session: MuxSession): Promise<any | null> {
         const configuredId = this.settings.newWindowProfile
         if (configuredId) {
-            const profiles = await this.profiles.getProfiles()
+            const profiles = await this.getProfilesCached()
             const found = profiles.find(p => p.id === configuredId)
             if (found) {
                 return found
@@ -951,8 +929,26 @@ export class MuxService {
         if (paneProfile) {
             return paneProfile
         }
-        const profiles = await this.profiles.getProfiles()
+        const profiles = await this.getProfilesCached()
         return profiles.find(p => p.type === 'local') ?? null
+    }
+
+    /**
+     * ProfilesService.getProfiles() has no host-side cache: every call
+     * re-runs the builtin providers (fs scans for shells, SSH config
+     * imports). That disk work dominates the cost of rapid session creation,
+     * so the creation path reads through a short-lived cache here. Profile
+     * edits go through config.save() -> config.changed$, which invalidates
+     * immediately; the TTL only bounds staleness of rarely-changing builtin
+     * shell listings.
+     */
+    private async getProfilesCached (): Promise<any[]> {
+        if (this.profilesCache && Date.now() - this.profilesCache.at < 30_000) {
+            return this.profilesCache.list
+        }
+        const list = await this.profiles.getProfiles()
+        this.profilesCache = { at: Date.now(), list }
+        return list
     }
 
     private registerWindow (session: MuxSession, tab: SplitTabComponent): MuxWindow {
@@ -977,6 +973,16 @@ export class MuxService {
         } else if (session.currentWindowIndex < 0) {
             session.currentWindowIndex = session.windows.length - 1
         }
+        // Isolation invariant at the source: a window registered for a
+        // session that is not the attached one must not stay listed. Windows
+        // land via addTabRaw (which lists + selects them) before the caller
+        // can attach their session, so without this sweep rapid concurrent
+        // creations leak each other's terminals into the tab bar. Soft
+        // removal - the window lives on as a background session window.
+        if (this.isolated && session.id !== this.attachedSessionId &&
+            this.app.tabs.includes(tab)) {
+            this.app.removeTab(tab)
+        }
         this.changed$.next()
         return win
     }
@@ -997,7 +1003,10 @@ export class MuxService {
         this.app.tabOpened$.subscribe(tab => this.tryAdopt(tab))
         this.app.tabRemoved$.subscribe(tab => this.pruneWindow(tab))
         this.app.activeTabChange$.subscribe(tab => this.trackActiveWindow(tab))
-        this.config.changed$.subscribe(() => this.applyIsolationSetting())
+        this.config.changed$.subscribe(() => {
+            this.profilesCache = null
+            this.applyIsolationSetting()
+        })
 
         // Boot-time helpers must never take the whole plugin (and with it
         // the app) down - a malformed persisted template is data, not a

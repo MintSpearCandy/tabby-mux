@@ -114,6 +114,7 @@ export class MuxStatusbarService {
     private bar: HTMLElement | null = null
     private started = false
     private renderTimer: any = null
+    private lastHtml: string | null = null
 
     private samplerTimer: any = null
     private lastCpuSample: ReturnType<typeof cpus> | null = null
@@ -238,10 +239,18 @@ export class MuxStatusbarService {
         this.bar.classList.toggle('visible', show)
         document.body.classList.toggle('mux-statusbar-visible', show)
         if (!show) {
+            this.lastHtml = null
             return
         }
 
-        this.bar.innerHTML = this.buildHtml(session!)
+        const html = this.buildHtml(session!)
+        // Skip identical DOM writes: window titles fire changed$
+        // constantly; re-parsing the same innerHTML is pure waste at high
+        // session counts.
+        if (html !== this.lastHtml) {
+            this.bar.innerHTML = html
+            this.lastHtml = html
+        }
     }
 
     private buildHtml (session: any): string {

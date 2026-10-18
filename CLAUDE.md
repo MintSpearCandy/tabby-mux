@@ -35,7 +35,7 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 
 - **软移除**：`app.removeTab(tab)` **不销毁 tab**——tab-body 的 `ngOnDestroy` 只 `placeholder.detach()`（tabBody.component.ts），组件/终端会话/xterm 全部存活；且此路径**不发射 `tabRemoved$`**（它只在 destroyed$ 链上发射），插件注册表天然无需清理。
 - **恢复**：`app.addTabRaw(tab)` → `*ngFor` 新建 tab-body → `ngOnChanges` `setImmediate` 后 `placeholder.insert(tab.hostView)` 重插视图 → xterm ResizeObserver 自动 refit。
-- 附着不变式：隔离模式下 `attachedSessionId` 唯一；`applyIsolationSetting()`（boot + config.changed$）做 reconcile——**混合→隔离切换必须撤下所有非 keep 会话的已列出窗口**（只处理 attached 会话不够，2026-10-16 实测踩过）。
+- 附着不变式（2026-10-18 加固）：隔离模式下 tab bar 只列附着会话的窗口，靠**三层协同**维持——① `attachSession()` 做**全局清扫**（撤下所有非目标会话的已列出窗口，不是只 detach 前一个附着会话）；② `registerWindow()` 末尾把"注册到非附着会话"的窗口立即软移除（窗口经 `addTabRaw` 落地时会被列出+选中，必须在源头撤下）；③ `createSessionWithWindow()`/`createSessionFromTemplate()` 在**创建完成后**才 attach（预 attach 是竞态：创建在 `await resolveProfile` 处挂起，并发调用的 attachedSessionId 会被改写——高频新建曾因此把每个会话的窗口都漏管滞留在 bar，切换也不清除，2026-10-18 CDP 实测复现+修复）。并发创建的终态 = 最后 attach 者胜，全部窗口归属正确。
 - 后台会话不在 app.tabs → **不进 Tabby 崩溃恢复快照**（重启即失，README 已注明）。
 - detached 窗口的 kill 走 `canClose() + tab.destroy()` 直连（closeTab 只认已列出 tab）；destroy → destroyed$ → addTabRaw 的订阅 → tabRemoved$ → 注册表自清。
 
@@ -47,6 +47,8 @@ tmux attach 语义的落地（`mux.isolatedSessions`，默认开）：
 4. **`addTabRaw` 在 `registerWindow` 之前发射 activeTabChange$**：窗口注册时若 `app.activeTab === tab` 必须手动同步 `currentWindowIndex`（否则索引永久 desync）——见 `registerWindow` 内注释。
 5. **原生 `splitTab()`（duplicate 式）在终端 session 未初始化完时返回 null**（recovery token 未就绪）：splitPane 已做同 profile 新建终端的回退（也更贴近 tmux `%` 语义）。
 6. 工程侧：typescript 必须 ^4.9.5（TS 5.x 与 tabby-terminal→@ng-bootstrap→compiler-cli peer 链 ERESOLVE）；peerDependencies 只声明 `@angular/core`；部署时 dist 必须**作为子目录**整体拷贝。
+7. **`tabOpened$` 在 `addTabRaw` 内同步发射**（app.service.ts 唯一 next 点）：领养抑制（suppressAdoption）只需覆盖同步调用段——跨 await 的长命计数器会吞掉用户在模板构建期间并发新开的 tab（成为永远无主的窗口）。buildWindowFromSpec 的抑制已窄化到 `addTabRaw` 那一行。
+8. **`ProfilesService.getProfiles()` 无宿主缓存**：每次调用重跑 builtin 枚举（本地 shell 的 fs.stat/PATH 扫描、SSH importer 读配置）——高频建会话时这是主要插件侧开销。创建路径走 `getProfilesCached()`（30s TTL + config.changed$ 失效；profile 编辑都经 config.save → 立即失效）。终端 spawn 本身是 `ipcRenderer.sendSync`（阻塞 renderer，宿主固有，无法规避）。
 
 ## UI 注入与设置页（2026-10-16 二轮实测）
 

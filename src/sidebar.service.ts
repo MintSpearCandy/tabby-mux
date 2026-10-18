@@ -151,6 +151,7 @@ export class MuxSidebarService {
     private sessionsEl: HTMLElement | null = null
     private started = false
     private renderTimer: any = null
+    private lastHtml: string | null = null
 
     constructor (injector: Injector) {
         this.mux = injector.get(MuxService)
@@ -244,6 +245,7 @@ export class MuxSidebarService {
             '--mux-rail-w', `${Math.max(160, settings.sidebar.width)}px`)
         this.rail.classList.toggle('visible', show)
         if (!show) {
+            this.lastHtml = null
             return
         }
 
@@ -266,12 +268,20 @@ export class MuxSidebarService {
                 `<span class="mux-rail-name">${name || '…'}</span>` +
                 `<span class="mux-rail-count">${s.windows.length}</span></div>`)
         })
-        this.sessionsEl.innerHTML = parts.join('')
+        // Skip identical DOM writes: title churn fires changed$
+        // constantly; re-parsing the same innerHTML is pure waste at high
+        // session counts.
+        const html = parts.join('')
+        if (html !== this.lastHtml) {
+            this.sessionsEl.innerHTML = html
+            this.lastHtml = html
+        }
 
         const countEl = this.rail.querySelector('.mux-tpl-count')
         const templateCount = this.mux.templates.length
-        if (countEl) {
-            countEl.textContent = templateCount ? `${templateCount}` : ''
+        const countText = templateCount ? `${templateCount}` : ''
+        if (countEl && countEl.textContent !== countText) {
+            countEl.textContent = countText
         }
         const tmplBtn = this.rail.querySelector('.mux-rail-tmpl') as HTMLElement
         if (tmplBtn) {
