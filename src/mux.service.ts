@@ -42,6 +42,7 @@ import {
     tokenToSpec,
 } from './template.model'
 import { MuxStatusbarService } from './statusbar.service'
+import { MuxTearoffService } from './tearoff'
 import { MuxSidebarService } from './sidebar.service'
 import { MuxSyncService } from './sync'
 
@@ -1331,7 +1332,11 @@ export class MuxService {
             this.profilesCache = null
             this.applyIsolationSetting()
         })
-        this.setupTabTearoff()
+        try {
+            this.injector.get(MuxTearoffService).start()
+        } catch {
+            // tear-off choreography is additive
+        }
 
         // Multi-host mesh: every registry mutation marks the snapshot dirty;
         // a 2s flush broadcasts it (titles churn often, payloads are tiny).
@@ -1387,73 +1392,17 @@ export class MuxService {
         return this.sync.knownHosts()
     }
 
-    /**
-     * Drag-to-detach: Tabby tab drags are CDK drags (mouse-based, not HTML5
-     * DnD). While a button is held the OS captures the pointer to the
-     * window, so document mousemove keeps reporting coordinates even
-     * outside the window bounds; tabDragActive$ goes null when the CDK drag
-     * ends. Releasing a mux window's tab outside this OS window detaches it
-     * into a new one; releasing it inside another known host's bounds
-     * merges it there.
-     */
-    private dragArmTab: BaseTabComponent | null = null
-    private dragLastScreen: { x: number, y: number } | null = null
-    private dragDecided = false
-
-    private setupTabTearoff (): void {
-        try {
-            document.addEventListener('mousemove', ev => {
-                if (this.dragArmTab) {
-                    this.dragLastScreen = { x: ev.screenX, y: ev.screenY }
-                }
-            }, { capture: true, passive: true })
-            this.app.tabDragActive$.subscribe(tab => {
-                if (tab) {
-                    const win = this.windowForTab(tab)
-                    this.dragArmTab = win && this.hostsWindow(win) ? tab : null
-                    this.dragLastScreen = null
-                    this.dragDecided = false
-                } else if (this.dragArmTab && !this.dragDecided) {
-                    this.dragDecided = true
-                    const tab = this.dragArmTab
-                    this.dragArmTab = null
-                    this.finishTabTearoff(tab)
-                }
-            })
-            // Keep other hosts' hit-test bounds fresh while windows move.
-            this.hostWindow.windowMoved$.subscribe(() => this.sync.sendAlive())
-        } catch {
-            // tear-off is an additive affordance; never fatal
+    /** Which other host's window contains the given screen point, if any. */
+    dropTargetHostAt (x: number, y: number): number | null {
+        const margin = 16
+        for (const host of this.sync.knownHosts()) {
+            const b = this.sync.hostBounds(host)
+            if (b && x >= b.x - margin && x <= b.x + b.w + margin &&
+                y >= b.y - margin && y <= b.y + b.h + margin) {
+                return host
+            }
         }
-    }
-
-    private finishTabTearoff (tab: BaseTabComponent): void {
-        try {
-            const win = this.windowForTab(tab)
-            const pt = this.dragLastScreen
-            if (!win || !this.hostsWindow(win) || !pt) {
-                return
-            }
-            // Small tolerance so edge-hugging drops (split zones) stay put.
-            const margin = 16
-            const inside = (x: number, y: number, b: { x: number, y: number, w: number, h: number }) =>
-                x >= b.x - margin && x <= b.x + b.w + margin &&
-                y >= b.y - margin && y <= b.y + b.h + margin
-            const self = { x: window.screenX, y: window.screenY, w: window.outerWidth, h: window.outerHeight }
-            if (inside(pt.x, pt.y, self)) {
-                return
-            }
-            for (const host of this.sync.knownHosts()) {
-                const bounds = this.sync.hostBounds(host)
-                if (bounds && inside(pt.x, pt.y, bounds)) {
-                    void this.moveWindowTo(win, host)
-                    return
-                }
-            }
-            void this.moveWindowTo(win, 'new')
-        } catch {
-            // best-effort affordance
-        }
+        return null
     }
 
     /** Palette command: pick a target (new window or a known host) and move. */
@@ -1482,7 +1431,7 @@ export class MuxService {
      * Only then is the local tab destroyed with sessions marked open=false -
      * the normal destroy chain would kill the shared shells.
      */
-    async moveWindowTo (win: MuxWindow | null, target: 'new' | number): Promise<boolean> {
+    async moveWindowTo (win: MuxWindow | null, target: 'new' | number, opts?: { bounds?: { x: number, y: number, width: number, height: number } }): Promise<boolean> {
         if (!this.hostsWindow(win) || this.pendingHandover.has(win!.id)) {
             return false
         }
@@ -1498,6 +1447,7 @@ export class MuxService {
             sessionCreatedAt: win!.session.createdAt,
             windowId: win!.id,
             windowName: win!.name,
+            bounds: opts?.bounds ?? null,
             token,
             ts: Date.now(),
         }
@@ -1546,6 +1496,16 @@ export class MuxService {
 
     private async recoverPulledWindow (entry: PullStashEntry): Promise<void> {
         try {
+            // The tear-off drop point: apply before anything else so the
+            // window settles at the placeholder's position as early as its
+            // (already visible) boot allows.
+            if (entry.bounds?.width) {
+                try {
+                    ;(this.hostWindow as any).getWindow?.()?.setBounds?.(entry.bounds)
+                } catch {
+                    // positioning is cosmetic
+                }
+            }
             const params = await this.tabRecovery.recoverTab(entry.token)
             if (!params) {
                 return // source-side timeout re-hosts the window

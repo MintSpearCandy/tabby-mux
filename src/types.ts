@@ -202,6 +202,8 @@ export interface PullStashEntry {
     sessionCreatedAt: number
     windowId: string
     windowName: string | null
+    /** Tear-off drop point: the recovering window lands here at boot. */
+    bounds?: { x: number, y: number, width: number, height: number } | null
     /** SplitTab recovery token (children carry restoreFromPTYID + savedState). */
     token: any
     ts: number
