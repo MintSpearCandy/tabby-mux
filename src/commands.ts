@@ -36,6 +36,11 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
         run: mux => mux.createSessionWithWindow(),
     },
     {
+        id: 'mux.new-session-from-template',
+        labelKey: 'mux.tmpl.browse',
+        run: mux => mux.browseTemplates(),
+    },
+    {
         id: 'mux.rename-session',
         labelKey: 'mux.renameSession',
         needsSession: true,

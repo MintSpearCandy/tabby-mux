@@ -106,4 +106,11 @@ node scripts/cdpEval.js "window.tabbyMux.sessions.length"
 
 ## 一期未做（Roadmap）
 
-prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎、设置页。热键默认全空（`hotkeys.mux.*: []`），用户在设置页绑定。
+prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。4 个命令有默认绑定（2026-10-25 用户指定，configProvider DEFAULT_BINDINGS）：new-session=`Ctrl-Shift-=`、switch-session-next/prev=`Ctrl-Shift-Down/Up`、new-session-from-template=`Ctrl-Shift-\`（新增命令，打开模板选择器）。
+
+## 热键（2026-10-25 实测沉淀）
+
+- **和弦格式**：`-` 分隔（非 `+`），键名基于 `event.code` 映射（hotkeys.util.ts）：`Equal→'='`、`Backslash→'\'`、`Arrow→''`（Up/Down）；Shift 下 `=` 报 `+` 但 code 归一为 `=`。
+- **多重匹配规则**：同弦多命令时取**最长序列、同长取注册序首个**——builtin（tabby-terminal 等）先注册恒胜用户插件。**默认冲突清单（tabby-terminal config.ts）**：`zoom-in`=['Ctrl-=','Ctrl-Shift-=',…]、`scroll-up/down`=['Ctrl-Shift-Up','Ctrl-Shift-Down']——用户指定的新默认里 3 组被遮蔽（实测 CDP 注入只 Matched builtin；`Ctrl-Shift-\` 正常命中 mux）。用户需在 设置→热键 清掉 builtin 绑定才能让 mux 生效。
+- **旧默认固化问题**：ConfigProxy 读数组会把旧默认（全 `[]`）固化写回 config.yaml → **改默认绑定对已有实例不生效**（存量覆盖默认）；新命令无存量则正常拿到新默认。升级时需显式写入用户配置（那属于落实用户需求，不违反共用实例纪律）。
+- CDP 注入配方验证有效：F13 烧去重槽 + 两轮注入（300ms 间隔）+ `Runtime.consoleAPICalled` 抓 "Matched hotkey" 日志作命中证据；注入 zoom 类和弦后记得 `webFrame.setZoomLevel(0)` 复原。
