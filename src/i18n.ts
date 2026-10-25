@@ -7,6 +7,7 @@ import { LocaleService } from 'tabby-core'
 const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
     en: {
         'mux.newSession': 'Mux: new session',
+        'mux.newSessionFromTemplate': 'Mux: new session from template',
         'mux.renameSession': 'Mux: rename session',
         'mux.switchSessionNext': 'Mux: switch to next session',
         'mux.switchSessionPrev': 'Mux: switch to previous session',
@@ -150,6 +151,7 @@ const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
     },
     zh: {
         'mux.newSession': 'Mux：新建会话',
+        'mux.newSessionFromTemplate': 'Mux：从模板新建会话',
         'mux.renameSession': 'Mux：重命名会话',
         'mux.switchSessionNext': 'Mux：切换到下一个会话',
         'mux.switchSessionPrev': 'Mux：切换到上一个会话',

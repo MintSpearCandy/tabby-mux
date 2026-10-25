@@ -3,21 +3,6 @@ import { CONFIG_KEY, HOTKEY_PREFIX } from './configKeys'
 import { defaultMuxSettings } from './types'
 import { MUX_COMMANDS, hotkeyConfigKey } from './commands'
 
-/**
- * Default chord assignments (2026-10-25, user decision). Format per host
- * hotkeys.util: dash-separated, code-based key names - Equal maps to '=',
- * Backslash to '\'. NOTE Ctrl-Shift-Up/Down collide with tabby-terminal's
- * builtin scroll-up/scroll-down defaults; among equal-length matches the
- * engine picks the first registered, so the builtin wins until the user
- * clears those bindings in Settings -> Hotkeys.
- */
-const DEFAULT_BINDINGS: Record<string, string[]> = {
-    'mux.new-session': ['Ctrl-Shift-='],
-    'mux.switch-session-next': ['Ctrl-Shift-Down'],
-    'mux.switch-session-prev': ['Ctrl-Shift-Up'],
-    'mux.new-session-from-template': ['Ctrl-Shift-\\'],
-}
-
 export class MuxConfigProvider extends ConfigProvider {
     defaults = {
         [CONFIG_KEY]: defaultMuxSettings(),
@@ -25,9 +10,15 @@ export class MuxConfigProvider extends ConfigProvider {
         // arrays. ConfigProxy silently drops user-made bindings for subtrees
         // that no ConfigProvider declared (they vanish from the settings UI
         // and from the hotkey engine on the next load).
+        //
+        // No default chords: the user-chosen candidates collided with
+        // tabby-terminal builtins (zoom-in / scroll-up / scroll-down), and
+        // the engine lets builtins win equal-length matches. All mux
+        // commands stay discoverable in Settings -> Hotkeys by searching
+        // "mux" (the filter matches name + id, and every id is mux.*).
         hotkeys: {
             [HOTKEY_PREFIX]: Object.fromEntries(
-                MUX_COMMANDS.map(cmd => [hotkeyConfigKey(cmd.id), DEFAULT_BINDINGS[cmd.id] ?? []]),
+                MUX_COMMANDS.map(cmd => [hotkeyConfigKey(cmd.id), []]),
             ),
         },
     }

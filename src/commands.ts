@@ -37,7 +37,7 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
     },
     {
         id: 'mux.new-session-from-template',
-        labelKey: 'mux.tmpl.browse',
+        labelKey: 'mux.newSessionFromTemplate',
         run: mux => mux.browseTemplates(),
     },
     {

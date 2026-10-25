@@ -106,7 +106,7 @@ node scripts/cdpEval.js "window.tabbyMux.sessions.length"
 
 ## 一期未做（Roadmap）
 
-prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。4 个命令有默认绑定（2026-10-25 用户指定，configProvider DEFAULT_BINDINGS）：new-session=`Ctrl-Shift-=`、switch-session-next/prev=`Ctrl-Shift-Down/Up`、new-session-from-template=`Ctrl-Shift-\`（新增命令，打开模板选择器）。
+prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；39 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`；`mux.new-session-from-template` 为模板新建命令，打开可搜索选择器）。
 
 ## 热键（2026-10-25 实测沉淀）
 
