@@ -106,13 +106,17 @@ node scripts/cdpEval.js "window.tabbyMux.sessions.length"
 
 ## 一期未做（Roadmap）
 
-prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；41 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`）。**多窗口拉出/合并已实现（见下节）。**
+prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；40 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`）。**多窗口管理已实现（见下节）。**
 
-## 多窗口拉出/合并（2026-10-25 实现，CDP 双窗口 E2E 全绿）
+## 多窗口管理：浏览器模型（2026-10-25 定稿，CDP 多窗口 E2E 全绿）
 
-session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拉回主窗；同一 session 全局一套窗口序号，热键（select-window-N / next / previous）跨窗口切前台。用户决策：拉出窗口关闭需确认（每窗口一次 mux 弹窗）；切换到"本窗口无 window"的会话时**主窗口回落 Tabby 原生 0-tab 空态**（`.no-tabs` 只是标记 class，核心样式无引用，无需同步；插件不插任何页面）、**副窗口整个隐藏**（软移除窗口在隐藏 renderer 里继续跑 = tmux detach；`HostWindowService` 无 hide，走 Electron 宿主的 `getWindow().hide()`）；拉出窗口内 mux 状态栏照常显示（含窗口条）。唤回（focus-win）时若目标会话未附着需先 `attachSession` 重挂再 selectTab——隐藏窗的 bar 是空的，selectTab 前必须 relist。
+session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拖进拖出；同一 session 全局一套窗口序号，热键（select-window-N / next / previous）跨窗口切前台。
 
-**全局会话切换 + 副窗锁（2026-10-25 用户决策）**：会话切换是全局的——**主窗口是唯一管理者**：主窗每次 `attachSession`（隔离模式）设 `globalSessionId` 并广播 `attach-session`；副窗自己的切换永远本地（绝不广播）。未锁副窗收到 attach-session 即本地跟随：有本地窗口则选中并**隐藏态自动 `showInactive()` 复现**（用户反馈修复：切回之前的会话时被隐藏的副窗必须出现；可见窗为无操作；实现挂在 attachSession 的有内容分支，全局切回/解锁重估/focus-win 统一走它），无本地窗口则隐藏。**会话锁**（`mux.toggle-session-lock` 命令 + 副窗状态栏锁按钮，主窗无此按钮）：锁定副窗免疫 attach-session；解锁瞬间重估——按 `globalSessionId` 重挂，有内容复现、无则继续隐藏。globalSessionId 经 attach-session 事件与 snapshot（带 `global` 字段）复制；锁为 renderer 运行时状态（副窗本就短命，不持久化）。
+**方向决策（2026-10-25 用户纠偏，推翻同日早前的"全局切换+副窗锁+自动隐藏"方案）**：以**浏览器为参照**——每个 OS 窗口是**对等的普通容器**，不是围绕主窗的共生进程。因此：
+- **无全局会话切换、无锁、无主/副层级**：各窗口的 attachSession 纯本地，互不广播互不跟随；一个窗口切会话不影响任何其它窗口（曾实现的 attach-session 广播、globalSessionId、sessionLocked、状态栏锁按钮、toggle-session-lock 命令、hideIfEmptySecondary/showSecondary 全部移除）。
+- **窗口永不自隐藏**：会话在本窗无窗口 → Tabby 原生 0-tab 空态（`.no-tabs` 只是标记 class，核心样式无引用），窗口保持可见。
+- 保留的浏览器能力：拖 tab 出窗 = 新窗口（拖到其它 mux 窗口上 = 合并进它）、tab 右键"拉出到新窗口/移动到其它窗口…"、命令面板选择器、窗口条 chip 点击/热键跨窗切前台、关闭含终端窗口前确认（canClose 补丁，仅非首个窗口）、kill 跨窗路由、注册表快照复制 + 心跳判死。
+- 窗口条（状态栏）显示整个 session 的窗口序号，远程窗口淡显带 ↗，点击经 focus-win（目标窗本地 attach + selectTab + bringToFront）到前台。
 
 **宿主机制（可行性验证过的平台事实）**：
 - 每 OS 窗口 = 独立 renderer（`loadFile(index.html)` 全新 bootstrap），插件每窗口一份实例。新窗口：`HostAppService.newWindow()`（tabby-core 基类抽象方法）→ `app:new-window` IPC；`@electron/remote` 不转发 ipcRenderer（要 IPC 就直接 require('electron')）。新窗口**不自动恢复 tabs**。窗口 id：`BOOTSTRAP_DATA.windowID`（tabby-core 注入令牌，typings 里是 string 类型要双 cast）；`bootstrapData.isMainWindow` 随 `host:became-main-window` 活更新。

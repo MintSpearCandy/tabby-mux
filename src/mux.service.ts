@@ -156,30 +156,6 @@ export class MuxService {
 
     private attachedSessionId: string | null = null
 
-    /**
-     * The session the MAIN window currently shows - the global selection
-     * every unlocked secondary follows. Updated by attach-session events,
-     * snapshots, and (authoritatively) the main window's own attaches.
-     */
-    private globalSessionId: string | null = null
-
-    /**
-     * Secondary-window session lock: a locked host ignores global session
-     * switches (its pulled-out windows stay on screen while the main window
-     * browses other sessions). Its own switches stay local either way -
-     * only the main window broadcasts.
-     */
-    private sessionLocked = false
-
-    get sessionLockActive (): boolean {
-        return this.sessionLocked && !this.sync.isMainWindow
-    }
-
-    /** True in every OS window except the main one (pulled-window hosts). */
-    get isSecondaryHost (): boolean {
-        return !this.sync.isMainWindow
-    }
-
     get activeWindow (): MuxWindow | null {
         const tab = this.app.activeTab
         if (tab instanceof SplitTabComponent) {
@@ -356,27 +332,12 @@ export class MuxService {
         const target = this.hostsWindow(current) ? current : session.windows.find(w => this.hostsWindow(w))
         if (target) {
             this.app.selectTab(target.tab!)
-            // A hidden secondary that just got content comes back on screen
-            // (global switch back to its session, unlock re-evaluation).
-            // showInactive is a no-op for a visible window; the main window
-            // never hides and never auto-shows anything.
-            this.showSecondary()
-        } else {
-            // Every window of this session lives in another OS window. The
-            // main window falls through to Tabby's native no-tabs state; a
-            // secondary window has no reason to stay on screen - hide it
-            // (soft-removed windows keep running in its hidden renderer,
-            // tmux-detach style; focus-win brings it back).
-            this.hideIfEmptySecondary()
         }
+        // Browser model: every OS window is a plain peer container. A window
+        // whose session has no locally-hosted windows simply falls through to
+        // Tabby's native no-tabs state - it never hides, and nothing here
+        // reaches into other windows.
         this.moveForeignTabsToTail()
-        // Session switching is global: the main window manages the selection,
-        // unlocked secondaries follow (see the attach-session handler). A
-        // secondary's own attaches never broadcast - only main manages.
-        if (this.isolated && this.sync.isMainWindow) {
-            this.globalSessionId = session.id
-            this.sync.send({ t: 'attach-session', host: this.sync.hostWindowId, sessionId: session.id })
-        }
         this.changed$.next()
     }
 
@@ -1325,7 +1286,7 @@ export class MuxService {
         this.sync.received$.subscribe(ev => this.handleSyncEvent(ev))
         try {
             this.sync.gcStash()
-            this.sync.start(() => ({ sessions: this.snapshotDto(), global: this.globalSessionId }))
+            this.sync.start(() => this.snapshotDto())
         } catch {
             // sync-less operation: local sessions still work
         }
@@ -1614,7 +1575,6 @@ export class MuxService {
         } catch {
             // the shells live on in the other host either way
         }
-        this.hideIfEmptySecondary()
         this.changed$.next()
     }
 
@@ -1657,25 +1617,8 @@ export class MuxService {
                     this.sync.replySnapshot()
                     break
                 case 'snapshot':
-                    if (typeof ev.global === 'string' && ev.global) {
-                        this.globalSessionId = ev.global
-                    }
                     this.applySnapshot(ev.sessions)
                     break
-                case 'attach-session': {
-                    // Global session switch (manager = main window). A locked
-                    // secondary opts out; the main window is the source and
-                    // never follows. attachSession here is local-only.
-                    if (this.sync.isMainWindow || this.sessionLocked) {
-                        break
-                    }
-                    this.globalSessionId = typeof ev.sessionId === 'string' ? ev.sessionId : null
-                    const session = this.sessions.find(s => s.id === ev.sessionId)
-                    if (session && this.isolated) {
-                        this.attachSession(session)
-                    }
-                    break
-                }
                 case 'win-hosted': {
                     const pending = this.pendingHandover.get(ev.windowId)
                     if (pending) {
@@ -1866,7 +1809,6 @@ export class MuxService {
                 t: 'snapshot',
                 host: this.sync.hostWindowId,
                 sessions: this.snapshotDto(),
-                global: this.globalSessionId,
             })
         }, 2_000)
     }
@@ -1893,73 +1835,6 @@ export class MuxService {
             })
             return result.response === 0
         }
-    }
-
-    /**
-     * A mux operation left this OS window with nothing to list (switched to a
-     * session whose windows all live elsewhere, pulled out the last one,
-     * closed the last one). The main window falls through to Tabby's native
-     * no-tabs state; secondary windows exist only to host pulled windows, so
-     * an empty one hides instead - its soft-removed background windows keep
-     * running (hidden renderer = detached tmux client). focus-win /
-     * bringToFront unhides it.
-     */
-    private hideIfEmptySecondary (): void {
-        try {
-            if (this.sync.isMainWindow || this.app.tabs.length) {
-                return
-            }
-            // HostWindowService (tabby-core) has no hide; the Electron host
-            // exposes the BrowserWindow via getWindow(). Never fatal - on a
-            // host without it the window simply stays visible and blank.
-            ;(this.hostWindow as any).getWindow?.()?.hide?.()
-        } catch {
-            // hiding is cosmetic; the registry state is already correct
-        }
-    }
-
-    /** Unhide without stealing focus (showInactive, plain show as fallback). */
-    private showSecondary (): void {
-        try {
-            if (this.sync.isMainWindow) {
-                return
-            }
-            const win = (this.hostWindow as any).getWindow?.()
-            if (typeof win?.showInactive === 'function') {
-                win.showInactive()
-            } else {
-                win?.show?.()
-            }
-        } catch {
-            // cosmetic
-        }
-    }
-
-    /**
-     * Secondary-window session lock. Locking shields this host from global
-     * session switches. Unlocking re-syncs to the global session right away:
-     * show it if this host carries any of its windows, otherwise keep the
-     * hidden state (attachSession's empty branch hides again).
-     */
-    toggleSessionLock (): void {
-        if (this.sync.isMainWindow) {
-            return // the main window IS the manager; locking it is meaningless
-        }
-        this.sessionLocked = !this.sessionLocked
-        if (!this.sessionLocked) {
-            const global = this.globalSessionId
-                ? this.sessions.find(s => s.id === this.globalSessionId)
-                : null
-            const target = global ?? this.attachedSession
-            if (target && this.isolated) {
-                const hasContent = target.windows.some(w => this.hostsWindow(w))
-                this.attachSession(target)
-                if (hasContent) {
-                    this.showSecondary()
-                }
-            }
-        }
-        this.changed$.next()
     }
 
     private tryAdopt (tab: BaseTabComponent): void {
@@ -2022,7 +1897,6 @@ export class MuxService {
                 session.lastWindowIndex = -1
             }
         }
-        this.hideIfEmptySecondary()
         this.changed$.next()
     }
 

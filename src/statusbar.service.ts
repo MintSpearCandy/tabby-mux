@@ -112,18 +112,6 @@ const STYLE = `
 }
 #tabby-mux-statusbar .mux-tmpl-btn:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
 #tabby-mux-statusbar .mux-tmpl-btn i { font-size: 11px; }
-#tabby-mux-statusbar .mux-lock-btn {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 7px;
-    border-radius: 3px;
-    color: var(--theme-fg-more, #999);
-    cursor: pointer;
-    flex-shrink: 0;
-}
-#tabby-mux-statusbar .mux-lock-btn i { font-size: 11px; }
-#tabby-mux-statusbar .mux-lock-btn:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
-#tabby-mux-statusbar .mux-lock-btn.locked { color: var(--theme-warning, #f0ad4e); }
 /* Make room for the bar by shrinking the app root (xterm refits via its
    ResizeObserver); the bar itself overlays the freed strip. */
 body.mux-statusbar-visible app-root { padding-bottom: var(--mux-statusbar-h, 26px); }
@@ -314,17 +302,6 @@ export class MuxStatusbarService {
         })
         parts.push(`<span class="mux-sessions">${chips.join('')}</span>`)
 
-        // Session lock - secondary windows only. Locking shields this host
-        // from the global session switches the main window broadcasts; the
-        // button doubles as the state indicator.
-        if (this.mux.isSecondaryHost && this.mux.isolated) {
-            const locked = this.mux.sessionLockActive
-            parts.push(
-                `<span class="mux-lock-btn${locked ? ' locked' : ''}" ` +
-                `title="${escapeHtml(this.i18n.t(locked ? 'mux.mw.locked' : 'mux.mw.unlocked'))}">` +
-                `<i class="fas ${locked ? 'fa-lock' : 'fa-lock-open'}"></i></span>`)
-        }
-
         // ---- window strip: one chip per window of the shown session. The
         // numbering spans OS windows - windows pulled into another host show
         // dimmed with a link-out marker; clicking one brings its host to the
@@ -403,10 +380,6 @@ export class MuxStatusbarService {
             if (session) {
                 this.mux.switchToSession(session)
             }
-            return
-        }
-        if (target.closest('.mux-lock-btn')) {
-            this.mux.toggleSessionLock()
             return
         }
         const winEl = target.closest('.mux-win-chip') as HTMLElement | null
