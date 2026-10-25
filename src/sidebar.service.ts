@@ -166,6 +166,18 @@ export class MuxSidebarService {
         }
         this.started = true
 
+        // Pop-out windows (browser model): plain tab containers, no
+        // management chrome. Session management lives in the main window -
+        // the rail never mounts here and Tabby's profile tree is hidden so
+        // the pop-out reads as "just this window's tabs", not a second app.
+        if (!this.mux.isMainWindowHost) {
+            const style = document.createElement('style')
+            style.id = `${STYLE_ID}-popout`
+            style.textContent = 'profile-tree { display: none !important; }'
+            document.head.appendChild(style)
+            return
+        }
+
         const style = document.createElement('style')
         style.id = STYLE_ID
         style.textContent = STYLE

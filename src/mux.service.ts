@@ -184,6 +184,11 @@ export class MuxService {
         return !!win?.tab && win.hostWindowId === this.sync.hostWindowId
     }
 
+    /** True in the first OS window; pop-out windows get reduced chrome. */
+    get isMainWindowHost (): boolean {
+        return this.sync.isMainWindow
+    }
+
     findWindowById (id: string): { session: MuxSession, win: MuxWindow } | null {
         for (const session of this.sessions) {
             const win = session.windows.find(w => w.id === id)
@@ -206,7 +211,12 @@ export class MuxService {
     newSession (name?: string | null): MuxSession {
         const requested = (name ?? this.settings.defaultSessionName ?? '').trim()
         const session: MuxSession = {
-            id: `s${this.sessionSeq++}`,
+            // Host-qualified ids: sessionSeq counts per renderer, so a bare
+            // `s0` would collide with every other host's first session and
+            // snapshot merges would fuse unrelated sessions (renames crossing
+            // hosts, windows jumping sessions, isolation sweeping hosted tabs
+            // off the bar - the pull-out "entry broken" report, 2026-10-25).
+            id: `s${this.sync.hostWindowId}.${this.sessionSeq++}`,
             name: requested,
             createdAt: Date.now(),
             windows: [],
