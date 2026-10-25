@@ -106,7 +106,18 @@ node scripts/cdpEval.js "window.tabbyMux.sessions.length"
 
 ## 一期未做（Roadmap）
 
-prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；39 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`；`mux.new-session-from-template` 为模板新建命令，打开可搜索选择器）。
+prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；39 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`；`mux.new-session-from-template` 为模板新建命令，打开可搜索选择器）。**多窗口拉出/合并：可行性已验证（见下节），实现待排期。**
+
+## 多窗口拉出（可行性验证 2026-10-25，CDP 双窗口实测）
+
+目标：把 session 的 window 独立拉出成新 OS 窗口（或合并进已有拉出窗口），同一 session 同一套序号，热键跨窗口切换到前台。**结论：架构可行**，全部关键链路实测通过。
+
+- **每 OS 窗口 = 独立 renderer**（`app/lib/window.ts`：`loadFile(index.html)` 全新 Angular bootstrap），插件每窗口各一份实例（B 窗口 `window.tabbyMux` 存在）。新窗口入口：`require('electron').ipcRenderer.send('app:new-window')`（= `HostAppService.newWindow()`；`@electron/remote` 不转发 ipcRenderer，直接 require('electron')）。**新窗口不自动恢复 tabs**（实测空 tab 列表）。窗口 id：`remote.getCurrentWindow().id`。
+- **PTY 常驻主进程**（`app/lib/pty.ts` PTYManager）：uuid 键控 map，**仅子进程退出时删除**；session 销毁与否无关。IPC 面：`pty:spawn/exists/get-pid/resize/write/kill/ack-data`。**`pty:<id>:data` 经 `app.broadcast` 发给所有窗口** → 同一 PTY 可被多窗口同时附着 = 真 tmux attach 镜像语义（实测双向回显）。
+- **跨窗口附着 = recovery token**：A 侧 `pane.getRecoveryToken({includeState:true})` → `profile.options.restoreFromPTYID` + `savedState`（xterm 序列化状态，随 token 跨窗口迁移，实测含旧屏内容）；B 侧 `injector.get(TabRecoveryService).recoverTab(token)` + `tabsService.create` + `addTabRaw` → **同一 shell**（实测 ptyId 一致）。token 跨窗口传递：localStorage 共享（同 origin file://，实测可读）。
+- **销毁配方（拉出的成败关键）**：`BaseSession.destroy()` 会 `gracefullyKillProcess()` 杀 shell（tabby-terminal session.ts:114）。但 `BaseTerminalTabComponent.destroy()` 有 `if (this.session?.open)` 门（baseTerminalTab.component.ts:658）→ **A 侧先 `pane.session.open = false` 再 `tab.destroy()`，共享 shell 不死**（实测 B 侧继续回显存活）。副作用：`destroyed$` 不发射 → local session 的 pty IPC 监听器滞留 A（每 pane 3 个；可补刀 `(session as any).pty.unsubscribeAll()`）；mux 注册表经 destroyed$ 链正常自清。镜像双方任一**正常** destroy 都会杀共享 shell——所有涉及共享 PTY 的销毁必须走此配方。
+- **跨窗口通信三通道（全实测可用）**：localStorage 共享（拉数据）；`BroadcastChannel`（推送，file:// 同 origin 生效）；`remote.BrowserWindow.getAllWindows()/fromId(id).webContents.send('event',…)`（按窗口 id 定向）+ `fromId(id).focus()`（跨窗口聚焦，实测 A 命令 B 到前台）。协议建议：BroadcastChannel 做主通道，窗口 id 做路由。
+- **遗留设计点**：B 窗口直接关闭会杀其独占的 shell（正常 destroy 链）——关闭前需"拉回主窗口或确认"；两窗口互写同一 `localStorage.tabsRecovery`（快照互覆盖，与既有"后台会话不进快照"语义一致）；测试脚本 `scripts/cdpEvalW.js`（--win 选 target + 每次 evaluate 前 F13 戳 zone，多窗口实验必备）。
 
 ## 热键（2026-10-25 实测沉淀）
 
