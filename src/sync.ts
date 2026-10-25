@@ -25,7 +25,8 @@ import { MuxSessionDTO, PullStashEntry } from './types'
 export type MuxSyncEvent =
     | { t: 'hello', host: number }
     | { t: 'alive', host: number, bounds?: { x: number, y: number, w: number, h: number } }
-    | { t: 'snapshot', host: number, sessions: MuxSessionDTO[] }
+    | { t: 'snapshot', host: number, sessions: MuxSessionDTO[], global?: string | null }
+    | { t: 'attach-session', host: number, sessionId: string }
     | { t: 'win-hosted', host: number, windowId: string }
     | { t: 'win-gone', host: number, windowId: string }
     | { t: 'focus-win', host: number, windowId: string }
@@ -106,7 +107,7 @@ export class MuxSyncService {
      * Opens the channel and starts the liveness heartbeat. `snapshotProvider`
      * is consulted to answer `hello` with the local registry view.
      */
-    start (snapshotProvider: () => MuxSessionDTO[] | null): void {
+    start (snapshotProvider: () => { sessions: MuxSessionDTO[], global: string | null } | null): void {
         if (this.started) {
             return
         }
@@ -146,7 +147,7 @@ export class MuxSyncService {
         })
     }
 
-    private snapshotProvider: (() => MuxSessionDTO[] | null) | null = null
+    private snapshotProvider: (() => { sessions: MuxSessionDTO[], global: string | null } | null) | null = null
 
     private tick (): void {
         this.sendAlive()
@@ -163,7 +164,7 @@ export class MuxSyncService {
     replySnapshot (): void {
         const dto = this.snapshotProvider?.() ?? null
         if (dto) {
-            this.send({ t: 'snapshot', host: this.hostWindowId, sessions: dto })
+            this.send({ t: 'snapshot', host: this.hostWindowId, sessions: dto.sessions, global: dto.global })
         }
     }
 

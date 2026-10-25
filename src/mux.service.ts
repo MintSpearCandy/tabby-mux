@@ -156,6 +156,14 @@ export class MuxService {
 
     private attachedSessionId: string | null = null
 
+    /**
+     * The globally active session - sessions outrank windows, and switching
+     * (from ANY window) is global. Every host replicates this id; windows
+     * that host none of the active session's windows hide until it becomes
+     * active again.
+     */
+    private globalSessionId: string | null = null
+
     get activeWindow (): MuxWindow | null {
         const tab = this.app.activeTab
         if (tab instanceof SplitTabComponent) {
@@ -256,7 +264,7 @@ export class MuxService {
         // the registerWindow sweep) stays correctly un-listed until this
         // final attach sweeps the bar and lists it. Last attach wins.
         if (this.isolated) {
-            this.attachSession(session)
+            this.attachSession(session, { global: true })
         }
         return session
     }
@@ -333,7 +341,7 @@ export class MuxService {
      * detaches the host view; addTabRaw re-creates a tab-body whose
      * ngOnChanges re-inserts the view so the terminal renders again.
      */
-    attachSession (session: MuxSession): void {
+    attachSession (session: MuxSession, opts?: { global?: boolean }): void {
         this.relistSessionWindows(session)
         this.attachedSessionId = session.id
         // Prefer the session's current window, but only a locally-hosted tab
@@ -343,11 +351,41 @@ export class MuxService {
         if (target) {
             this.app.selectTab(target.tab!)
         }
-        // Browser model: every OS window is a plain peer container. A window
-        // whose session has no locally-hosted windows simply falls through to
-        // Tabby's native no-tabs state - it never hides, and nothing here
-        // reaches into other windows.
+        // Session workspace model: this window is a view of the active
+        // session. Holding any of its windows => make sure we are on screen
+        // (a window hidden by an earlier switch comes back); holding none =>
+        // hide (its background windows keep running, tmux-detach style).
+        // The main window never hides - it is the management anchor and the
+        // default focus target on every switch.
+        if (target) {
+            this.showSelfIfHidden()
+        } else {
+            this.hideSelfIfNotMain()
+        }
         this.moveForeignTabsToTail()
+        // Global switch: any window may switch; everyone follows. The flag
+        // is set only on user-facing funnels (session switch commands,
+        // dead-session takeover), never on local reconciles - applyIsolation
+        // runs in every host on every config save and must not re-broadcast.
+        if (opts?.global && this.isolated) {
+            this.globalSessionId = session.id
+            // Snapshot FIRST, then the switch: a freshly created session is
+            // unknown to peers until a snapshot reaches them (the lazy 2s
+            // flush lags this immediate broadcast), and an unknown id makes
+            // the receiver drop the switch silently. Same-channel messages
+            // are FIFO, so this order guarantees the stub exists first.
+            this.sync.send({
+                t: 'snapshot',
+                host: this.sync.hostWindowId,
+                sessions: this.snapshotDto(),
+                global: this.globalSessionId,
+            })
+            this.sync.send({ t: 'attach-session', host: this.sync.hostWindowId, sessionId: session.id })
+            // Focus lands on the main window by default on every switch.
+            if (this.sync.isMainWindow) {
+                this.hostWindow.bringToFront()
+            }
+        }
         this.changed$.next()
     }
 
@@ -387,7 +425,7 @@ export class MuxService {
     /** Mode-aware session switch (status bar chips, switch-session commands). */
     switchToSession (session: MuxSession): void {
         if (this.isolated) {
-            this.attachSession(session)
+            this.attachSession(session, { global: true })
             return
         }
         const current = session.windows[Math.max(0, session.currentWindowIndex)]
@@ -431,8 +469,11 @@ export class MuxService {
                 return
             }
             if (this.attachedSessionId !== keep.id) {
-                // Real attach switch: full attach, selection included.
-                this.attachSession(keep)
+                // Real attach switch: full attach, selection included. This
+                // only fires on genuine transitions (boot-time first attach,
+                // desync heal) - plain config saves take the relist-only
+                // branch below - so it is a legitimate global selection.
+                this.attachSession(keep, { global: true })
                 return
             }
             // Reconcile of the ALREADY-attached session - this runs on every
@@ -499,6 +540,12 @@ export class MuxService {
         }
     }
 
+    /**
+     * Explicit kill (tmux kill-window semantics - no prompts). The user
+     * already decided via the menu/command; canClose here would stall the
+     * whole flow on native per-pane dialogs (and on the close-confirm patch
+     * in pop-out windows), which is how remote-routed kills used to hang.
+     */
     async killWindow (win: MuxWindow | null): Promise<void> {
         if (!win) {
             return
@@ -517,9 +564,7 @@ export class MuxService {
             // Detached window: closeTab only works on listed tabs. Destroying
             // directly still fires tabRemoved$ (via addTabRaw's destroyed$
             // subscription), so the registry prunes itself.
-            if (await tab.canClose()) {
-                tab.destroy()
-            }
+            tab.destroy()
         }
     }
 
@@ -768,7 +813,7 @@ export class MuxService {
         }
         const session = this.newSession(template.name)
         if (this.isolated) {
-            this.attachSession(session)
+            this.attachSession(session, { global: true })
         }
         const shells: SplitTabComponent[] = []
         for (const windowSpec of specs) {
@@ -1296,7 +1341,7 @@ export class MuxService {
         this.sync.received$.subscribe(ev => this.handleSyncEvent(ev))
         try {
             this.sync.gcStash()
-            this.sync.start(() => this.snapshotDto())
+            this.sync.start(() => ({ sessions: this.snapshotDto(), global: this.globalSessionId }))
         } catch {
             // sync-less operation: local sessions still work
         }
@@ -1609,7 +1654,7 @@ export class MuxService {
                 if (this.isolated && this.sessions.length > 1) {
                     const next = this.sessions[this.sessions.length - 1]
                     if (next !== s) {
-                        this.attachSession(next)
+                        this.attachSession(next, { global: true })
                     }
                 }
             }
@@ -1627,8 +1672,28 @@ export class MuxService {
                     this.sync.replySnapshot()
                     break
                 case 'snapshot':
+                    if (typeof ev.global === 'string' && ev.global) {
+                        this.globalSessionId = ev.global
+                    }
                     this.applySnapshot(ev.sessions)
                     break
+                case 'attach-session': {
+                    // Global session switch, possibly triggered by any
+                    // window. Follow locally (attach hides/shows this window
+                    // per its share of the new session); the main window also
+                    // takes focus - the switch default. Never re-broadcast.
+                    if (typeof ev.sessionId === 'string' && ev.sessionId) {
+                        this.globalSessionId = ev.sessionId
+                    }
+                    const session = this.sessions.find(s => s.id === ev.sessionId)
+                    if (session && this.isolated) {
+                        this.attachSession(session)
+                        if (this.sync.isMainWindow) {
+                            this.hostWindow.bringToFront()
+                        }
+                    }
+                    break
+                }
                 case 'win-hosted': {
                     const pending = this.pendingHandover.get(ev.windowId)
                     if (pending) {
@@ -1647,7 +1712,7 @@ export class MuxService {
                             if (this.attachedSessionId === found.session.id) {
                                 this.attachedSessionId = null
                                 if (this.isolated && this.sessions.length) {
-                                    this.attachSession(this.sessions[this.sessions.length - 1])
+                                    this.attachSession(this.sessions[this.sessions.length - 1], { global: true })
                                 }
                             }
                         }
@@ -1819,6 +1884,7 @@ export class MuxService {
                 t: 'snapshot',
                 host: this.sync.hostWindowId,
                 sessions: this.snapshotDto(),
+                global: this.globalSessionId,
             })
         }, 2_000)
     }
@@ -1844,6 +1910,40 @@ export class MuxService {
                 cancelId: 1,
             })
             return result.response === 0
+        }
+    }
+
+    /**
+     * Window visibility follows the active session. HostWindowService
+     * (tabby-core) has no hide/show; the Electron host exposes the
+     * BrowserWindow via getWindow(). Both are best-effort - on a host
+     * without them the window just stays visible.
+     */
+    private hideSelfIfNotMain (): void {
+        try {
+            if (this.sync.isMainWindow || this.app.tabs.length) {
+                return
+            }
+            ;(this.hostWindow as any).getWindow?.()?.hide?.()
+        } catch {
+            // cosmetic
+        }
+    }
+
+    /** Reappearing with content must not steal focus from the main window. */
+    private showSelfIfHidden (): void {
+        try {
+            if (this.sync.isMainWindow) {
+                return
+            }
+            const win = (this.hostWindow as any).getWindow?.()
+            if (typeof win?.showInactive === 'function') {
+                win.showInactive()
+            } else {
+                win?.show?.()
+            }
+        } catch {
+            // cosmetic
         }
     }
 
@@ -1896,7 +1996,7 @@ export class MuxService {
             if (this.attachedSessionId === session.id) {
                 this.attachedSessionId = null
                 if (this.isolated && this.sessions.length) {
-                    this.attachSession(this.sessions[this.sessions.length - 1])
+                    this.attachSession(this.sessions[this.sessions.length - 1], { global: true })
                 }
             }
         } else {
