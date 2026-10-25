@@ -7,6 +7,7 @@ import TabbyCoreModule, {
     CommandProvider,
     ConfigProvider,
     HotkeyProvider,
+    TabContextMenuItemProvider,
     ToolbarButtonProvider,
 } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
@@ -14,6 +15,7 @@ import { MuxCommandProvider } from './commands'
 import { MuxConfigProvider } from './configProvider'
 import { MuxHotkeyProvider } from './hotkeys'
 import { MuxToolbarButtonProvider } from './toolbar'
+import { MuxTabContextMenu } from './tabContextMenu'
 import { MuxSettingsComponent } from './settings/muxSettings.component'
 import { MuxSettingsTabProvider } from './settings/settingsTabProvider'
 
@@ -27,6 +29,7 @@ import { MuxSettingsTabProvider } from './settings/settingsTabProvider'
         { provide: CommandProvider, useClass: MuxCommandProvider, multi: true },
         { provide: ToolbarButtonProvider, useClass: MuxToolbarButtonProvider, multi: true },
         { provide: SettingsTabProvider, useClass: MuxSettingsTabProvider, multi: true },
+        { provide: TabContextMenuItemProvider, useClass: MuxTabContextMenu, multi: true },
     ],
     declarations: [
         MuxSettingsComponent,

@@ -24,7 +24,7 @@ import { MuxSessionDTO, PullStashEntry } from './types'
 
 export type MuxSyncEvent =
     | { t: 'hello', host: number }
-    | { t: 'alive', host: number }
+    | { t: 'alive', host: number, bounds?: { x: number, y: number, w: number, h: number } }
     | { t: 'snapshot', host: number, sessions: MuxSessionDTO[], global?: string | null }
     | { t: 'attach-session', host: number, sessionId: string }
     | { t: 'win-hosted', host: number, windowId: string }
@@ -32,6 +32,13 @@ export type MuxSyncEvent =
     | { t: 'focus-win', host: number, windowId: string }
     | { t: 'kill-win', host: number, windowId: string }
     | { t: 'check-stash' }
+
+export interface HostBounds {
+    x: number
+    y: number
+    w: number
+    h: number
+}
 
 const CHANNEL_NAME = 'tabby-mux'
 export const STASH_KEY = 'tabby-mux:pull-stash'
@@ -57,7 +64,7 @@ export class MuxSyncService {
     private channel: BroadcastChannel | null = null
     private aliveTimer: any = null
     private started = false
-    private readonly lastSeen = new Map<number, number>()
+    private readonly lastSeen = new Map<number, { ts: number, bounds?: HostBounds }>()
 
     constructor (injector: Injector) {
         this.zone = injector.get(NgZone)
@@ -76,8 +83,24 @@ export class MuxSyncService {
     knownHosts (): number[] {
         const now = Date.now()
         return [...this.lastSeen.entries()]
-            .filter(([host, seen]) => host !== this.hostWindowId && now - seen < HOST_TTL_MS)
+            .filter(([host, seen]) => host !== this.hostWindowId && now - seen.ts < HOST_TTL_MS)
             .map(([host]) => host)
+    }
+
+    /** Last reported on-screen bounds of another host, if it sent any. */
+    hostBounds (host: number): HostBounds | null {
+        return this.lastSeen.get(host)?.bounds ?? null
+    }
+
+    /** Alive beat; carries this window's screen bounds so drag-to-merge can hit-test it. */
+    sendAlive (): void {
+        const bounds = {
+            x: window.screenX,
+            y: window.screenY,
+            w: window.outerWidth,
+            h: window.outerHeight,
+        }
+        this.send({ t: 'alive', host: this.hostWindowId, bounds })
     }
 
     /**
@@ -110,7 +133,11 @@ export class MuxSyncService {
                     if (msg.host === this.hostWindowId) {
                         return
                     }
-                    this.lastSeen.set(msg.host, Date.now())
+                    const prev = this.lastSeen.get(msg.host)
+                    this.lastSeen.set(msg.host, {
+                        ts: Date.now(),
+                        bounds: msg.t === 'alive' ? msg.bounds : prev?.bounds,
+                    })
                 }
                 this.received$.next(msg)
             }
@@ -124,10 +151,10 @@ export class MuxSyncService {
     private snapshotProvider: (() => { sessions: MuxSessionDTO[], global: string | null } | null) | null = null
 
     private tick (): void {
-        this.send({ t: 'alive', host: this.hostWindowId })
+        this.sendAlive()
         const now = Date.now()
         for (const [host, seen] of [...this.lastSeen.entries()]) {
-            if (host !== this.hostWindowId && now - seen > HOST_TTL_MS) {
+            if (host !== this.hostWindowId && now - seen.ts > HOST_TTL_MS) {
                 this.lastSeen.delete(host)
                 this.hostDied$.next(host)
             }
