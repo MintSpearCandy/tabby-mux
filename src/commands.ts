@@ -90,6 +90,11 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
         run: mux => mux.promptMoveWindow(mux.activeWindow),
     },
     {
+        id: 'mux.toggle-session-lock',
+        labelKey: 'mux.toggleSessionLock',
+        run: mux => mux.toggleSessionLock(),
+    },
+    {
         id: 'mux.next-window',
         labelKey: 'mux.nextWindow',
         needsSession: true,

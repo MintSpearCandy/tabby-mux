@@ -35,10 +35,11 @@ async function main () {
     let page
     if (win === null) {
         page = pages[pages.length - 1]
-    } else if (/^\d+$/.test(win)) {
-        page = pages[Number(win)]
     } else {
-        page = pages.find(t => t.id.startsWith(win))
+        // Prefix match first - target ids are hex and may be all-digits,
+        // which would otherwise be mistaken for a list index.
+        page = pages.find(t => t.id.startsWith(win)) ??
+            (/^\d+$/.test(win) ? pages[Number(win)] : undefined)
     }
     if (!page) {
         console.error(`no matching page target (win=${win}); pages:`, pages.map(t => `${t.id.slice(0, 8)} ${t.title.slice(0, 30)}`))
