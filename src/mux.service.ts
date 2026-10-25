@@ -356,6 +356,11 @@ export class MuxService {
         const target = this.hostsWindow(current) ? current : session.windows.find(w => this.hostsWindow(w))
         if (target) {
             this.app.selectTab(target.tab!)
+            // A hidden secondary that just got content comes back on screen
+            // (global switch back to its session, unlock re-evaluation).
+            // showInactive is a no-op for a visible window; the main window
+            // never hides and never auto-shows anything.
+            this.showSecondary()
         } else {
             // Every window of this session lives in another OS window. The
             // main window falls through to Tabby's native no-tabs state; a
