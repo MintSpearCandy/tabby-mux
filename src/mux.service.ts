@@ -1495,6 +1495,7 @@ export class MuxService {
             claim: target === 'new' ? 'new' : target,
             sessionId: win!.session.id,
             sessionName: win!.session.name,
+            sessionCreatedAt: win!.session.createdAt,
             windowId: win!.id,
             windowName: win!.name,
             token,
@@ -1554,12 +1555,16 @@ export class MuxService {
                 session = {
                     id: entry.sessionId,
                     name: entry.sessionName ?? '',
-                    createdAt: Date.now(),
+                    // The source session's creation time, not local now():
+                    // session order is global (createdAt sort), and a
+                    // locally-stamped stub would sort as brand new.
+                    createdAt: entry.sessionCreatedAt ?? Date.now(),
                     windows: [],
                     currentWindowIndex: -1,
                     lastWindowIndex: -1,
                 }
                 this.sessions.push(session)
+                this.sortSessions()
             }
             // Fresh host: attach without the global sweep - nothing else is
             // listed here and the sweep would fight the recovery below.
@@ -1849,9 +1854,26 @@ export class MuxService {
                 changed = true
             }
         }
+        if (this.sortSessions()) {
+            changed = true
+        }
         if (changed) {
             this.changed$.next()
         }
+    }
+
+    /**
+     * Session order is GLOBAL. Without this sort each host's array is
+     * "local creations, then snapshot stubs in arrival order" - two hosts
+     * creating sessions interleaved end up with swapped orders (visible in
+     * the status bar chips and the switch-session cycling). createdAt is
+     * the canonical key (monotonic per host, distinct in practice; the id
+     * tiebreak keeps equal timestamps deterministic everywhere).
+     */
+    private sortSessions (): boolean {
+        const before = this.sessions.map(s => s.id).join('|')
+        this.sessions.sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        return this.sessions.map(s => s.id).join('|') !== before
     }
 
     private snapshotDto (): MuxSessionDTO[] {

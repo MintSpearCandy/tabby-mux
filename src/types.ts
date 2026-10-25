@@ -198,6 +198,8 @@ export interface PullStashEntry {
     claim: number | 'new'
     sessionId: string
     sessionName: string
+    /** Creation timestamp of the source session - keeps global ordering stable in the recovering host. */
+    sessionCreatedAt: number
     windowId: string
     windowName: string | null
     /** SplitTab recovery token (children carry restoreFromPTYID + savedState). */
