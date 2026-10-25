@@ -109,9 +109,6 @@ const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
         'mux.tmpl.apply': 'New session from this template',
         'mux.tmpl.delete': 'Delete template',
         'mux.tmpl.none': '(no match)',
-        // ---- empty window page ----
-        'mux.empty.title': 'No session windows in this window',
-        'mux.empty.hint': 'The session windows were pulled into another window or closed. New windows open here; existing ones stay reachable from the status bar below.',
         'mux.session.saveTemplate': 'Save as template',
         'mux.session.rename': 'Rename session',
         'mux.session.kill': 'Kill session',
@@ -264,9 +261,6 @@ const TRANSLATIONS: Record<'en' | 'zh', Record<string, string>> = {
         'mux.tmpl.apply': '从此模板新建会话',
         'mux.tmpl.delete': '删除模板',
         'mux.tmpl.none': '（无匹配）',
-        // ---- 空窗口页 ----
-        'mux.empty.title': '此窗口中没有会话窗口',
-        'mux.empty.hint': '会话窗口已拉出到其它窗口或已关闭。新建的窗口会打开在这里；现有窗口始终可以从下方状态栏切换。',
         'mux.session.saveTemplate': '保存为模板',
         'mux.session.rename': '重命名会话',
         'mux.session.kill': '关闭会话',

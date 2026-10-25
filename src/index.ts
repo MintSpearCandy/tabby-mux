@@ -16,7 +16,6 @@ import { MuxHotkeyProvider } from './hotkeys'
 import { MuxToolbarButtonProvider } from './toolbar'
 import { MuxSettingsComponent } from './settings/muxSettings.component'
 import { MuxSettingsTabProvider } from './settings/settingsTabProvider'
-import { MuxEmptyTabComponent } from './emptyTab.component'
 
 @NgModule({
     imports: [CommonModule, FormsModule, DragDropModule, NgbNavModule, NgbDropdownModule, TabbyCoreModule],
@@ -31,7 +30,6 @@ import { MuxEmptyTabComponent } from './emptyTab.component'
     ],
     declarations: [
         MuxSettingsComponent,
-        MuxEmptyTabComponent,
     ],
 })
 export default class TabbyMuxModule { }

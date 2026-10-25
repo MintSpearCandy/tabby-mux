@@ -44,7 +44,6 @@ import {
 import { MuxStatusbarService } from './statusbar.service'
 import { MuxSidebarService } from './sidebar.service'
 import { MuxSyncService } from './sync'
-import { MuxEmptyTabComponent } from './emptyTab.component'
 
 /**
  * Owns the tmux session/window hierarchy.
@@ -333,11 +332,13 @@ export class MuxService {
         const target = this.hostsWindow(current) ? current : session.windows.find(w => this.hostsWindow(w))
         if (target) {
             this.app.selectTab(target.tab!)
-            this.closeEmptyPageIfAny()
         } else {
-            // Every window of this session lives in another OS window - the
-            // bar has nothing to show but the empty page.
-            this.openWelcomeIfEmpty()
+            // Every window of this session lives in another OS window. The
+            // main window falls through to Tabby's native no-tabs state; a
+            // secondary window has no reason to stay on screen - hide it
+            // (soft-removed windows keep running in its hidden renderer,
+            // tmux-detach style; focus-win brings it back).
+            this.hideIfEmptySecondary()
         }
         this.moveForeignTabsToTail()
         this.changed$.next()
@@ -1253,7 +1254,6 @@ export class MuxService {
         // foreign-tabs-at-tail invariant without relying on each caller.
         if (this.app.tabs.includes(tab)) {
             this.moveForeignTabsToTail()
-            this.closeEmptyPageIfAny()
         }
         this.changed$.next()
         return win
@@ -1503,7 +1503,7 @@ export class MuxService {
         } catch {
             // the shells live on in the other host either way
         }
-        this.openWelcomeIfEmpty()
+        this.hideIfEmptySecondary()
         this.changed$.next()
     }
 
@@ -1577,6 +1577,13 @@ export class MuxService {
                 case 'focus-win': {
                     const found = this.findWindowById(ev.windowId)
                     if (found && this.hostsWindow(found.win)) {
+                        // The target window may be a hidden secondary whose
+                        // bar was emptied by a session switch (its session
+                        // got soft-removed) - re-attach first so the tab is
+                        // actually listed, then select and unhide.
+                        if (this.isolated && this.attachedSessionId !== found.session.id) {
+                            this.attachSession(found.session)
+                        }
                         this.app.selectTab(found.win.tab!)
                         this.hostWindow.bringToFront()
                         this.markSnapshotDirty()
@@ -1756,33 +1763,25 @@ export class MuxService {
     }
 
     /**
-     * A mux operation emptied the tab bar (pulled the last window out,
-     * closed the last one) - show the mux empty page instead of a dead
-     * blank area. The host's welcome component is not exported from
-     * tabby-core, and this page offers mux actions anyway. Singleton: a
-     * second call while one is listed does nothing.
+     * A mux operation left this OS window with nothing to list (switched to a
+     * session whose windows all live elsewhere, pulled out the last one,
+     * closed the last one). The main window falls through to Tabby's native
+     * no-tabs state; secondary windows exist only to host pulled windows, so
+     * an empty one hides instead - its soft-removed background windows keep
+     * running (hidden renderer = detached tmux client). focus-win /
+     * bringToFront unhides it.
      */
-    private openWelcomeIfEmpty (): void {
+    private hideIfEmptySecondary (): void {
         try {
-            if (this.app.tabs.length ||
-                this.app.tabs.some(t => t instanceof MuxEmptyTabComponent)) {
+            if (this.sync.isMainWindow || this.app.tabs.length) {
                 return
             }
-            this.app.openNewTabRaw({ type: MuxEmptyTabComponent })
+            // HostWindowService (tabby-core) has no hide; the Electron host
+            // exposes the BrowserWindow via getWindow(). Never fatal - on a
+            // host without it the window simply stays visible and blank.
+            ;(this.hostWindow as any).getWindow?.()?.hide?.()
         } catch {
-            // empty-page fallback is cosmetic
-        }
-    }
-
-    /** A window came back to this host - close the mux empty page if shown. */
-    private closeEmptyPageIfAny (): void {
-        try {
-            const empty = this.app.tabs.find(t => t instanceof MuxEmptyTabComponent)
-            if (empty && this.app.tabs.length > 1) {
-                empty.destroy()
-            }
-        } catch {
-            // cosmetic
+            // hiding is cosmetic; the registry state is already correct
         }
     }
 
@@ -1846,7 +1845,7 @@ export class MuxService {
                 session.lastWindowIndex = -1
             }
         }
-        this.openWelcomeIfEmpty()
+        this.hideIfEmptySecondary()
         this.changed$.next()
     }
 

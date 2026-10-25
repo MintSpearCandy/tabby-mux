@@ -110,7 +110,7 @@ prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。�
 
 ## 多窗口拉出/合并（2026-10-25 实现，CDP 双窗口 E2E 全绿）
 
-session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拉回主窗；同一 session 全局一套窗口序号，热键（select-window-N / next / previous）跨窗口切前台。用户决策：拉出窗口关闭需确认（每窗口一次 mux 弹窗）；本窗口无窗口时回落到插件空态页；拉出窗口内 mux 状态栏照常显示（含窗口条）。
+session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拉回主窗；同一 session 全局一套窗口序号，热键（select-window-N / next / previous）跨窗口切前台。用户决策：拉出窗口关闭需确认（每窗口一次 mux 弹窗）；切换到"本窗口无 window"的会话时**主窗口回落 Tabby 原生 0-tab 空态**（`.no-tabs` 只是标记 class，核心样式无引用，无需同步；插件不插任何页面）、**副窗口整个隐藏**（软移除窗口在隐藏 renderer 里继续跑 = tmux detach；`HostWindowService` 无 hide，走 Electron 宿主的 `getWindow().hide()`）；拉出窗口内 mux 状态栏照常显示（含窗口条）。唤回（focus-win）时若目标会话未附着需先 `attachSession` 重挂再 selectTab——隐藏窗的 bar 是空的，selectTab 前必须 relist。
 
 **宿主机制（可行性验证过的平台事实）**：
 - 每 OS 窗口 = 独立 renderer（`loadFile(index.html)` 全新 bootstrap），插件每窗口一份实例。新窗口：`HostAppService.newWindow()`（tabby-core 基类抽象方法）→ `app:new-window` IPC；`@electron/remote` 不转发 ipcRenderer（要 IPC 就直接 require('electron')）。新窗口**不自动恢复 tabs**。窗口 id：`BOOTSTRAP_DATA.windowID`（tabby-core 注入令牌，typings 里是 string 类型要双 cast）；`bootstrapData.isMainWindow` 随 `host:became-main-window` 活更新。
@@ -118,13 +118,13 @@ session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拉回
 - **跨窗口附着 = recovery token**：`tab.getRecoveryToken({includeState:true})`（SplitTab 级 = root.serialize，子 token 带 `restoreFromPTYID` + `savedState` 屏幕状态）→ 目标窗口 `TabRecoveryService.recoverTab(token)` + `tabsService.create(params as any)`（typings 泛型约束 BaseTabComponent 需 cast）+ `addTabRaw` → 同一 shell（ptyId 一致实测）。
 - **销毁配方**：`BaseSession.destroy()` → `gracefullyKillProcess()` 杀 shell；但 `BaseTerminalTabComponent.destroy():658` 有 `if (this.session?.open)` 门 → 释放方先 `session.open = false`（每 pane）+ `(session as any).pty?.unsubscribeAll?.()` 清滞留 IPC 监听（destroyed$ 不发射，local session 的清理订阅不会跑）→ `app.removeTab` 软撤 → `tab.destroy()`。**共享 PTY 期间任何一方的正常 destroy 都会杀 shell**。
 - **窗口关闭链**：主进程 close → preventDefault → `host:window-close-request` → appRoot → `app.closeWindow()` → `closeAllTabs()` **逐 tab `canClose()`** → 全过才 `hostWindow.close()`。mux 在非主窗口给托管 SplitTab 打 `canClose` 补丁（确认弹窗替代原生逐 pane 询问；返回 false 即阻断整窗关闭）。
-- `WelcomeTabComponent` **不在 tabby-core 运行时导出表里**（index.ts 只 import 进 NgModule）也没有 recovery provider → 插件拿不到，空态页是插件自有组件（emptyTab.component.ts）。
+- `WelcomeTabComponent` **不在 tabby-core 运行时导出表里**（index.ts 只 import 进 NgModule）也没有 recovery provider → 插件拿不到（曾自建空态页组件，后按用户决策改为"主窗原生 0-tab 空态 + 副窗隐藏"，组件已删）。
 - 通信通道：`BroadcastChannel('tabby-mux')`（file:// 同 origin 推送）+ **共享 localStorage**（`tabby-mux:pull-stash` 中转——新窗口 boot 时收不到频道消息，移交必须走 stash）。跨窗聚焦 = 目标窗口自己 `HostWindowService.bringToFront()`（主进程 window-bring-to-front，含最小化恢复）。
 
 **实现结构**：`src/sync.ts`（MuxSyncService：事件收发、5s 心跳/16s TTL 判死、stash 读写）+ mux.service 多宿主区块。协议事件：hello（对端回 snapshot）/ alive / snapshot（changed$ 打脏 2s 懒广播，本地活动 tab 恒胜、pendingHandover 期间例外）/ win-hosted（移交确认，源方随即 kill-free 释放）/ win-gone（窗口真死，stub 持有者修剪）/ focus-win / kill-win / check-stash（叫醒活着的认领者）。
 - **拉出流程**：源方捕获 token → stash（claim=hostId 或 'new'）→ `hostApp.newWindow()`（若新窗）→ 目标 boot/被叫醒后 `claimStashEntries` 认领（'new' 仅 `!isMainWindow && bootTime > e.ts` 的窗口可领；stash TTL 120s 兜底）→ recoverTab + `registerWindow(session, split, entry.windowId)`（**fixedId 命中已有 stub 时原位替换**——快照先到的 stub 与恢复实体合并，否则重复条目）→ `activatePanes`（恢复的 pane 同样焦点门控）→ win-hosted → 源方 `releaseLocalTab`。60s 无确认 = 撤销移交（源窗口保留）。
 - **注册表复制**：MuxWindow `{tab: SplitTab|null, hostWindowId, remoteTitle}`；快照合并规则 = 本地活动 tab 恒胜、其余采信发送方（含窗口顺序按发送方序列重排，稳定排序）、旁观者（本 host 无该会话窗口）才采信 currentWindowIndex；远程 stub 的增删只走显式 ops（win-hosted/win-gone/心跳判死）+ `pruneRemoteHost`（会话全灭时复刻 pruneWindow 的接管逻辑）。
-- **空态页**（MuxEmptyTabComponent）：mux 操作清空 tab 栏（拉走最后一个/关闭）或 attach 到无本地窗口的会话时打开（单例），本地窗口回归（registerWindow/attachSession）自动收起。非 SplitTab 不被领养；foreignTabsToTail 把它当外来 tab 处理。
+- **无窗口回落（hideIfEmptySecondary）**：mux 操作清空 tab 栏（切换到全远程会话 / 拉走或关闭最后一个窗口，挂点 = attachSession 无本地目标分支 + releaseLocalTab + pruneWindow 尾部）时——主窗口什么都不插（原生 0-tab 空态即"默认无窗口页"），副窗口 `getWindow().hide()` 整窗隐藏；窗口条 chip / focus-win 经 `bringToFront → present → show` 复显。
 - 已知边界：关闭确认按窗口粒度（多窗口各弹一次，与原生逐 pane 粒度一致）；模板捕获只含本地窗口（远程布局树在别的 renderer）；双认领竞态最多镜像一次（无数据损失）；host 崩溃的窗口无重附着 token（PTY 泄漏至 shell 自然退出）；会话顺序各 host 可不同（switchSession 循环序纯观感）；两窗口互写 `localStorage.tabsRecovery`（宿主固有）。
 - 测试脚本 `scripts/cdpEvalW.js`（`--win <targetId前缀|序号>` 选窗口 + 每次求值前 F13 戳 zone）。原生 showMessageBox 测试不能靠 SendKeys（用户正在用机器时焦点不可控）——WM_CLOSE 关闭 Tabby 进程的小尺寸候选窗口（366x162）即等价取消，promise 落 false。
 
