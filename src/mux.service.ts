@@ -5,6 +5,8 @@ import {
     AppService,
     BaseTabComponent,
     ConfigService,
+    HostAppService,
+    HostWindowService,
     HotkeysService,
     MenuItemOptions,
     PlatformService,
@@ -13,6 +15,7 @@ import {
     SelectorService,
     SplitContainer,
     SplitTabComponent,
+    TabRecoveryService,
     TabsService,
 } from 'tabby-core'
 import { CONFIG_KEY, DEBUG_HANDLE } from './configKeys'
@@ -24,10 +27,12 @@ import {
     MuxLayoutNode,
     MuxPaneSpec,
     MuxSession,
+    MuxSessionDTO,
     MuxSessionTemplate,
     MuxSettings,
     MuxWindow,
     MuxWindowSpec,
+    PullStashEntry,
 } from './types'
 import {
     captureLayout,
@@ -38,6 +43,8 @@ import {
 } from './template.model'
 import { MuxStatusbarService } from './statusbar.service'
 import { MuxSidebarService } from './sidebar.service'
+import { MuxSyncService } from './sync'
+import { MuxEmptyTabComponent } from './emptyTab.component'
 
 /**
  * Owns the tmux session/window hierarchy.
@@ -63,14 +70,22 @@ export class MuxService {
     private readonly platform: PlatformService
     private readonly injector: Injector
     private readonly i18n: I18n
+    private readonly sync: MuxSyncService
+    private readonly hostApp: HostAppService
+    private readonly hostWindow: HostWindowService
+    private readonly tabRecovery: TabRecoveryService
 
     private readonly windowByTab = new Map<BaseTabComponent, MuxWindow>()
     private readonly titleSubs = new Map<BaseTabComponent, Subscription>()
+    /** Windows handed over to another host; destroyed here once `win-hosted` lands. */
+    private readonly pendingHandover = new Map<string, { win: MuxWindow, entryId: string, timer: any }>()
     private sessionSeq = 0
     private windowSeq = 0
     private suppressAdoption = 0
     private booted = false
     private profilesCache: { at: number, list: any[] } | null = null
+    private snapshotDirty = false
+    private snapshotTimer: any = null
 
     constructor (injector: Injector) {
         this.injector = injector
@@ -80,6 +95,10 @@ export class MuxService {
         this.config = injector.get(ConfigService)
         this.platform = injector.get(PlatformService)
         this.i18n = injector.get(I18n)
+        this.sync = injector.get(MuxSyncService)
+        this.hostApp = injector.get(HostAppService)
+        this.hostWindow = injector.get(HostWindowService)
+        this.tabRecovery = injector.get(TabRecoveryService)
 
         // Debug handle for CDP-based verification of a running instance.
         // (assigned via a local because a leading-paren line would chain onto
@@ -152,7 +171,28 @@ export class MuxService {
 
     /** Display name: custom window name, else the tab's dynamic title. */
     windowTitle (win: MuxWindow): string {
-        return win.name ?? win.tab.title ?? ''
+        if (win.name) {
+            return win.name
+        }
+        if (win.tab) {
+            return win.tab.title ?? ''
+        }
+        return win.remoteTitle ?? ''
+    }
+
+    /** Whether the live tab of this window lives in THIS renderer. */
+    hostsWindow (win: MuxWindow | null | undefined): boolean {
+        return !!win?.tab && win.hostWindowId === this.sync.hostWindowId
+    }
+
+    findWindowById (id: string): { session: MuxSession, win: MuxWindow } | null {
+        for (const session of this.sessions) {
+            const win = session.windows.find(w => w.id === id)
+            if (win) {
+                return { session, win }
+            }
+        }
+        return null
     }
 
     // ==================================================================
@@ -287,9 +327,17 @@ export class MuxService {
     attachSession (session: MuxSession): void {
         this.relistSessionWindows(session)
         this.attachedSessionId = session.id
+        // Prefer the session's current window, but only a locally-hosted tab
+        // can be selected here; a remote one stays with its own OS window.
         const current = session.windows[Math.max(0, session.currentWindowIndex)]
-        if (current) {
-            this.app.selectTab(current.tab)
+        const target = this.hostsWindow(current) ? current : session.windows.find(w => this.hostsWindow(w))
+        if (target) {
+            this.app.selectTab(target.tab!)
+            this.closeEmptyPageIfAny()
+        } else {
+            // Every window of this session lives in another OS window - the
+            // bar has nothing to show but the empty page.
+            this.openWelcomeIfEmpty()
         }
         this.moveForeignTabsToTail()
         this.changed$.next()
@@ -299,7 +347,8 @@ export class MuxService {
      * Restores the listing invariant for `session`: un-lists every other
      * session's windows and lists `session`'s. Returns whether the tab bar
      * changed at all - callers use this to distinguish "nothing to do" from
-     * an actual heal. Never touches the selection.
+     * an actual heal. Never touches the selection. Remote-hosted windows
+     * (tab: null) have no local tab and are skipped by both directions.
      */
     private relistSessionWindows (session: MuxSession): boolean {
         let mutated = false
@@ -308,6 +357,9 @@ export class MuxService {
                 continue
             }
             for (const win of [...other.windows]) {
+                if (!win.tab) {
+                    continue
+                }
                 const index = this.app.tabs.indexOf(win.tab)
                 if (index !== -1) {
                     this.app.removeTab(win.tab)
@@ -316,7 +368,7 @@ export class MuxService {
             }
         }
         for (const win of session.windows) {
-            if (!this.app.tabs.includes(win.tab)) {
+            if (win.tab && !this.app.tabs.includes(win.tab)) {
                 this.app.addTabRaw(win.tab)
                 mutated = true
             }
@@ -330,9 +382,10 @@ export class MuxService {
             this.attachSession(session)
             return
         }
-        const win = session.windows[Math.max(0, session.currentWindowIndex)]
+        const current = session.windows[Math.max(0, session.currentWindowIndex)]
+        const win = this.hostsWindow(current) ? current : session.windows.find(w => this.hostsWindow(w))
         if (win) {
-            this.app.selectTab(win.tab)
+            this.app.selectTab(win.tab!)
         }
         this.moveForeignTabsToTail()
     }
@@ -385,10 +438,10 @@ export class MuxService {
                 this.changed$.next()
             }
         } else {
-            // Mixed mode: every session's windows are listed.
+            // Mixed mode: every session's locally-hosted windows are listed.
             for (const session of this.sessions) {
                 for (const win of session.windows) {
-                    if (!this.app.tabs.includes(win.tab)) {
+                    if (win.tab && !this.app.tabs.includes(win.tab)) {
                         this.app.addTabRaw(win.tab)
                     }
                 }
@@ -442,20 +495,37 @@ export class MuxService {
         if (!win) {
             return
         }
-        if (this.app.tabs.includes(win.tab)) {
-            await this.app.closeTab(win.tab)
+        if (!this.hostsWindow(win)) {
+            // Hosted in another OS window: the owning host performs the real
+            // destroy (shells live there) and broadcasts win-gone; our stub
+            // is pruned when that lands.
+            this.sync.send({ t: 'kill-win', host: this.sync.hostWindowId, windowId: win.id })
+            return
+        }
+        const tab = win.tab!
+        if (this.app.tabs.includes(tab)) {
+            await this.app.closeTab(tab)
         } else {
             // Detached window: closeTab only works on listed tabs. Destroying
             // directly still fires tabRemoved$ (via addTabRaw's destroyed$
             // subscription), so the registry prunes itself.
-            if (await win.tab.canClose()) {
-                win.tab.destroy()
+            if (await tab.canClose()) {
+                tab.destroy()
             }
         }
     }
 
+    /**
+     * Local select when this host owns the window; otherwise a cross-host
+     * foreground: the owning host selects the tab and brings its OS window
+     * to front (window-bring-to-front also restores a minimized window).
+     */
     selectWindow (win: MuxWindow): void {
-        this.app.selectTab(win.tab)
+        if (this.hostsWindow(win)) {
+            this.app.selectTab(win.tab!)
+            return
+        }
+        this.sync.send({ t: 'focus-win', host: this.sync.hostWindowId, windowId: win.id })
     }
 
     selectWindowIndex (session: MuxSession | null, index: number): void {
@@ -481,8 +551,12 @@ export class MuxService {
         win.name = trimmed || null
         // Keep the native tab bar in sync (empty custom title = dynamic again).
         // setCustomTitle exists at runtime (host >= 1.0.237) but is missing
-        // from the tabby-core@1.0.231-nightly typings.
-        ;(win.tab as any).setCustomTitle(trimmed)
+        // from the tabby-core@1.0.231-nightly typings. Remote stubs have no
+        // local tab; their name reaches the owner through the snapshot.
+        if (win.tab) {
+            ;(win.tab as any).setCustomTitle(trimmed)
+        }
+        this.markSnapshotDirty()
         this.changed$.next()
     }
 
@@ -634,7 +708,9 @@ export class MuxService {
         const registry = await this.profiles.getProfiles()
         const windows: MuxWindowSpec[] = []
         for (const win of session.windows) {
-            if (!win.tab.getAllTabs().length) {
+            // Remote-hosted windows cannot be captured here (their layout
+            // tree lives in another renderer); templates cover local windows.
+            if (!win.tab || !win.tab.getAllTabs().length) {
                 continue
             }
             windows.push({ layout: captureLayout(win.tab.root, tab => (tab as any).profile, registry) })
@@ -873,7 +949,7 @@ export class MuxService {
 
     /** Captures one live session window as a layout spec (editor import). */
     async captureWindowSpec (win: MuxWindow): Promise<MuxWindowSpec | null> {
-        if (!win.tab.getAllTabs().length) {
+        if (!win.tab || !win.tab.getAllTabs().length) {
             return null
         }
         const registry = await this.profiles.getProfiles()
@@ -960,11 +1036,14 @@ export class MuxService {
         return await this.profiles.showProfileSelector()
     }
 
-    /** Searchable picker over the live sessions' windows (editor import). */
+    /** Searchable picker over the live sessions' locally-hosted windows (editor import). */
     async pickSessionWindow (): Promise<MuxWindow | null> {
         const options = []
         for (const session of this.sessions) {
             session.windows.forEach((win, i) => {
+                if (!win.tab) {
+                    return
+                }
                 options.push({
                     name: `${this.i18n.t('mux.edit.window', { n: i + 1 })} · ${this.sessionDisplayName(session)}`,
                     description: this.windowTitle(win),
@@ -1043,6 +1122,34 @@ export class MuxService {
         this.platform.popupContextMenu(items, event)
     }
 
+    /** Right-click menu for a session window (status bar window chips). */
+    windowContextMenu (win: MuxWindow, event: MouseEvent): void {
+        const items: MenuItemOptions[] = []
+        if (this.hostsWindow(win)) {
+            items.push({
+                label: this.i18n.t('mux.mw.moveToNew'),
+                click: () => void this.moveWindowTo(win, 'new'),
+            })
+            if (this.sync.knownHosts().length) {
+                items.push({
+                    label: this.i18n.t('mux.mw.moveToOther'),
+                    click: () => void this.promptMoveWindow(win),
+                })
+            }
+            items.push({ type: 'separator' })
+        }
+        items.push({
+            label: this.i18n.t('mux.renameWindow'),
+            click: () => void this.renameWindowPrompt(win),
+        })
+        items.push({ type: 'separator' })
+        items.push({
+            label: this.i18n.t('mux.killWindow'),
+            click: () => void this.killWindow(win),
+        })
+        this.platform.popupContextMenu(items, event)
+    }
+
     // ==================================================================
     // Internals
     // ==================================================================
@@ -1063,7 +1170,7 @@ export class MuxService {
         }
         // Inherit the profile of the session's focused pane (tmux-like).
         const win = session.windows[Math.max(0, session.currentWindowIndex)]
-        const paneProfile = (win?.tab.getFocusedTab() as any)?.profile
+        const paneProfile = (this.hostsWindow(win) ? win!.tab!.getFocusedTab() : null as any)?.profile
         if (paneProfile) {
             return paneProfile
         }
@@ -1089,27 +1196,46 @@ export class MuxService {
         return list
     }
 
-    private registerWindow (session: MuxSession, tab: SplitTabComponent): MuxWindow {
-        const win: MuxWindow = {
-            id: `w${this.windowSeq++}`,
+    private registerWindow (session: MuxSession, tab: SplitTabComponent, fixedId?: string): MuxWindow {
+        // Host-qualified ids: two renderers creating windows concurrently
+        // must never mint the same id (replication matches on it).
+        const id = fixedId ?? `w${this.sync.hostWindowId}.${this.windowSeq++}`
+        // A stub for this window may already exist (snapshots announced the
+        // pull before this host recovered it) - adopt it in place instead of
+        // appending a duplicate entry.
+        const existing = session.windows.find(w => w.id === id)
+        const win: MuxWindow = existing ?? {
+            id,
             name: null,
             tab,
             session,
+            hostWindowId: this.sync.hostWindowId,
+            remoteTitle: null,
         }
-        session.windows.push(win)
+        if (existing) {
+            existing.tab = tab
+            existing.hostWindowId = this.sync.hostWindowId
+            existing.remoteTitle = null
+        } else {
+            session.windows.push(win)
+        }
         this.windowByTab.set(tab, win)
         this.titleSubs.set(tab, tab.titleChange$.subscribe(() => this.changed$.next()))
+        if (!this.sync.isMainWindow) {
+            this.installCloseConfirm(tab)
+        }
+        const winIndex = session.windows.indexOf(win)
         // addTabRaw selects the new tab BEFORE this registration runs, so the
         // activeTabChange$ event already flew past trackActiveWindow with the
         // tab still unregistered. Sync indices here to avoid a desync where
         // currentWindowIndex points at the previously active window.
         if (this.app.activeTab === tab) {
-            if (session.currentWindowIndex >= 0 && session.currentWindowIndex < session.windows.length - 1) {
+            if (session.currentWindowIndex >= 0 && session.currentWindowIndex !== winIndex) {
                 session.lastWindowIndex = session.currentWindowIndex
             }
-            session.currentWindowIndex = session.windows.length - 1
+            session.currentWindowIndex = winIndex
         } else if (session.currentWindowIndex < 0) {
-            session.currentWindowIndex = session.windows.length - 1
+            session.currentWindowIndex = winIndex
         }
         // Isolation invariant at the source: a window registered for a
         // session that is not the attached one must not stay listed. Windows
@@ -1127,6 +1253,7 @@ export class MuxService {
         // foreign-tabs-at-tail invariant without relying on each caller.
         if (this.app.tabs.includes(tab)) {
             this.moveForeignTabsToTail()
+            this.closeEmptyPageIfAny()
         }
         this.changed$.next()
         return win
@@ -1153,6 +1280,24 @@ export class MuxService {
             this.applyIsolationSetting()
         })
 
+        // Multi-host mesh: every registry mutation marks the snapshot dirty;
+        // a 2s flush broadcasts it (titles churn often, payloads are tiny).
+        // Explicit ops (win-hosted/win-gone/focus-win) travel immediately.
+        this.changed$.subscribe(() => this.markSnapshotDirty())
+        this.sync.hostDied$.subscribe(host => this.pruneRemoteHost(host))
+        this.sync.received$.subscribe(ev => this.handleSyncEvent(ev))
+        try {
+            this.sync.gcStash()
+            this.sync.start(() => this.snapshotDto())
+        } catch {
+            // sync-less operation: local sessions still work
+        }
+        try {
+            void this.processPullStash()
+        } catch {
+            // a claimed entry that fails to recover times out on the source
+        }
+
         // Boot-time helpers must never take the whole plugin (and with it
         // the app) down - a malformed persisted template is data, not a
         // reason to fail startup.
@@ -1178,6 +1323,467 @@ export class MuxService {
         }
 
         this.changed$.next()
+    }
+
+    // ==================================================================
+    // Multi-host: window pull-out / merge (see sync.ts for the transport)
+    // ==================================================================
+
+    /** Palette command: pick a target (new window or a known host) and move. */
+    async promptMoveWindow (win: MuxWindow | null): Promise<void> {
+        if (!this.hostsWindow(win)) {
+            return
+        }
+        const selector = this.injector.get(SelectorService)
+        const options: { name: string, icon: string, result: 'new' | number }[] = [
+            { name: this.i18n.t('mux.mw.newWindow'), icon: 'fas fa-external-link-alt', result: 'new' },
+        ]
+        for (const host of this.sync.knownHosts()) {
+            options.push({ name: this.i18n.t('mux.mw.hostTarget', { id: host }), icon: 'fas fa-window-restore', result: host })
+        }
+        const chosen = await selector.show<'new' | number>(this.i18n.t('mux.moveWindow'), options)
+        if (chosen !== null && chosen !== undefined) {
+            await this.moveWindowTo(win!, chosen)
+        }
+    }
+
+    /**
+     * Moves a locally-hosted window to another OS window. The recovery token
+     * (children carry restoreFromPTYID + serialized screen state) is stashed
+     * in the SHARED localStorage; the target renderer recovers it into a live
+     * SplitTab attached to the very same PTYs, then confirms with win-hosted.
+     * Only then is the local tab destroyed with sessions marked open=false -
+     * the normal destroy chain would kill the shared shells.
+     */
+    async moveWindowTo (win: MuxWindow | null, target: 'new' | number): Promise<boolean> {
+        if (!this.hostsWindow(win) || this.pendingHandover.has(win!.id)) {
+            return false
+        }
+        const token = await win!.tab!.getRecoveryToken({ includeState: true })
+        if (!token) {
+            return false
+        }
+        const entry: PullStashEntry = {
+            id: `pull-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+            claim: target === 'new' ? 'new' : target,
+            sessionId: win!.session.id,
+            sessionName: win!.session.name,
+            windowId: win!.id,
+            windowName: win!.name,
+            token,
+            ts: Date.now(),
+        }
+        const pending = { win: win!, entryId: entry.id, timer: null as any }
+        this.pendingHandover.set(win!.id, pending)
+        this.sync.pushStash(entry)
+        if (target === 'new') {
+            try {
+                this.hostApp.newWindow()
+            } catch {
+                // stash entry stays; an already-open host may still claim it
+            }
+        }
+        this.sync.send({ t: 'check-stash' })
+        // Abort guard: a target that never comes up leaves the window here.
+        pending.timer = setTimeout(() => this.abortHandover(win!.id), 60_000)
+        return true
+    }
+
+    private abortHandover (windowId: string): void {
+        const pending = this.pendingHandover.get(windowId)
+        if (!pending) {
+            return
+        }
+        this.pendingHandover.delete(windowId)
+        clearTimeout(pending.timer)
+        this.sync.removeStashEntry(pending.entryId)
+        this.changed$.next()
+    }
+
+    /** Target side: claim and recover stash entries addressed to this host. */
+    private async processPullStash (): Promise<void> {
+        const entries = this.sync.claimStashEntries(e => {
+            if (e.claim === this.sync.hostWindowId) {
+                return true
+            }
+            // 'new' entries belong to a window booted AFTER they were stashed;
+            // the main window (first boot, before any stash existed) never
+            // claims, and neither does any restarted-app main window.
+            return e.claim === 'new' && !this.sync.isMainWindow && this.sync.bootTime > (e.ts ?? 0)
+        })
+        for (const entry of entries) {
+            await this.recoverPulledWindow(entry)
+        }
+    }
+
+    private async recoverPulledWindow (entry: PullStashEntry): Promise<void> {
+        try {
+            const params = await this.tabRecovery.recoverTab(entry.token)
+            if (!params) {
+                return // source-side timeout re-hosts the window
+            }
+            let session = this.sessions.find(s => s.id === entry.sessionId)
+            if (!session) {
+                session = {
+                    id: entry.sessionId,
+                    name: entry.sessionName ?? '',
+                    createdAt: Date.now(),
+                    windows: [],
+                    currentWindowIndex: -1,
+                    lastWindowIndex: -1,
+                }
+                this.sessions.push(session)
+            }
+            // Fresh host: attach without the global sweep - nothing else is
+            // listed here and the sweep would fight the recovery below.
+            if (this.isolated && this.attachedSessionId !== session.id &&
+                !session.windows.some(w => this.hostsWindow(w))) {
+                this.attachedSessionId = session.id
+            }
+            this.suppressAdoption++
+            let split: SplitTabComponent
+            try {
+                // Recovery tokens type as BaseTabComponent parameters; a
+                // split-tab token recovers to a SplitTabComponent at runtime
+                // (the old template-apply path relied on the same fact).
+                split = this.tabsService.create(params as any)
+                this.app.addTabRaw(split)
+            } finally {
+                this.suppressAdoption--
+            }
+            const win = this.registerWindow(session, split, entry.windowId)
+            win.name = entry.windowName ?? null
+            // Recovered panes attach to live PTYs but the frontend attach is
+            // focus-gated (see activatePanes) - sweep them explicitly.
+            await this.activatePanes(split)
+            ;(split as any).updateTitle?.()
+            this.sync.send({ t: 'win-hosted', host: this.sync.hostWindowId, windowId: entry.windowId })
+            this.changed$.next()
+        } catch {
+            // leave the entry consumed; the source-side timeout re-hosts
+        }
+    }
+
+    /**
+     * Source side of a completed handover: convert the window entry to a
+     * remote stub and destroy the local tab WITHOUT killing the shells -
+     * BaseSession.destroy() runs gracefullyKillProcess(), but both destroy
+     * chains are gated on `session.open`, so clearing the flag first makes
+     * every pane release its PTY listeners harmlessly. The now-orphaned pty
+     * listeners are detached too (destroyed$ never fires on this path).
+     */
+    private async releaseLocalTab (win: MuxWindow): Promise<void> {
+        const tab = win.tab
+        if (!tab) {
+            return
+        }
+        this.windowByTab.delete(tab)
+        this.titleSubs.get(tab)?.unsubscribe()
+        this.titleSubs.delete(tab)
+        win.tab = null
+        win.remoteTitle = tab.title ?? null
+        // Un-list first: destroy of a listed tab fires the same registry
+        // chain as a real close (which would broadcast win-gone).
+        if (this.app.tabs.includes(tab)) {
+            this.app.removeTab(tab)
+        }
+        for (const pane of tab.getAllTabs()) {
+            const session = (pane as any).session
+            if (session) {
+                session.open = false
+                try {
+                    ;(session as any).pty?.unsubscribeAll?.()
+                } catch {
+                    // listener cleanup is best-effort
+                }
+            }
+        }
+        try {
+            await tab.destroy()
+        } catch {
+            // the shells live on in the other host either way
+        }
+        this.openWelcomeIfEmpty()
+        this.changed$.next()
+    }
+
+    /** Removes every window of a host that stopped broadcasting (crash/close). */
+    private pruneRemoteHost (host: number): void {
+        let changed = false
+        for (const session of [...this.sessions]) {
+            const survivors = session.windows.filter(w => w.hostWindowId !== host)
+            if (survivors.length !== session.windows.length) {
+                session.windows = survivors
+                changed = true
+            }
+        }
+        this.sessions = this.sessions.filter(s => {
+            if (s.windows.length) {
+                return true
+            }
+            // A session whose every window died with that host is gone; if it
+            // was attached, hand the bar to the newest survivor (or welcome).
+            if (this.attachedSessionId === s.id) {
+                this.attachedSessionId = null
+                if (this.isolated && this.sessions.length > 1) {
+                    const next = this.sessions[this.sessions.length - 1]
+                    if (next !== s) {
+                        this.attachSession(next)
+                    }
+                }
+            }
+            return false
+        })
+        if (changed) {
+            this.changed$.next()
+        }
+    }
+
+    private handleSyncEvent (ev: any): void {
+        try {
+            switch (ev?.t) {
+                case 'hello':
+                    this.sync.replySnapshot()
+                    break
+                case 'snapshot':
+                    this.applySnapshot(ev.sessions)
+                    break
+                case 'win-hosted': {
+                    const pending = this.pendingHandover.get(ev.windowId)
+                    if (pending) {
+                        this.pendingHandover.delete(ev.windowId)
+                        clearTimeout(pending.timer)
+                        void this.releaseLocalTab(pending.win)
+                    }
+                    break
+                }
+                case 'win-gone': {
+                    const found = this.findWindowById(ev.windowId)
+                    if (found && !found.win.tab) {
+                        found.session.windows = found.session.windows.filter(w => w !== found.win)
+                        if (!found.session.windows.length) {
+                            this.sessions = this.sessions.filter(s => s !== found.session)
+                            if (this.attachedSessionId === found.session.id) {
+                                this.attachedSessionId = null
+                                if (this.isolated && this.sessions.length) {
+                                    this.attachSession(this.sessions[this.sessions.length - 1])
+                                }
+                            }
+                        }
+                        this.changed$.next()
+                    }
+                    break
+                }
+                case 'focus-win': {
+                    const found = this.findWindowById(ev.windowId)
+                    if (found && this.hostsWindow(found.win)) {
+                        this.app.selectTab(found.win.tab!)
+                        this.hostWindow.bringToFront()
+                        this.markSnapshotDirty()
+                    }
+                    break
+                }
+                case 'kill-win': {
+                    const found = this.findWindowById(ev.windowId)
+                    if (found && this.hostsWindow(found.win)) {
+                        void this.killWindow(found.win)
+                    }
+                    break
+                }
+                case 'check-stash':
+                    void this.processPullStash()
+                    break
+            }
+        } catch {
+            // a malformed peer message must never destabilize this host
+        }
+    }
+
+    /**
+     * Merges a peer's registry view. Locally-hosted live tabs always win
+     * (this renderer is their source of truth); everything else adopts the
+     * sender's fields, and window order follows the sender's sequence.
+     */
+    private applySnapshot (dto: any): void {
+        if (!Array.isArray(dto)) {
+            return
+        }
+        let changed = false
+        for (const sd of dto) {
+            if (!sd || typeof sd.id !== 'string') {
+                continue
+            }
+            let session = this.sessions.find(s => s.id === sd.id)
+            if (!session) {
+                session = {
+                    id: sd.id,
+                    name: typeof sd.name === 'string' ? sd.name : '',
+                    createdAt: sd.createdAt ?? Date.now(),
+                    windows: [],
+                    currentWindowIndex: typeof sd.currentWindowIndex === 'number' ? sd.currentWindowIndex : -1,
+                    lastWindowIndex: -1,
+                }
+                this.sessions.push(session)
+                changed = true
+            } else if (session.name !== (sd.name ?? '')) {
+                session.name = sd.name ?? ''
+                changed = true
+            }
+            const known = new Map(session.windows.map(w => [w.id, w]))
+            const windows: any[] = Array.isArray(sd.windows) ? sd.windows : []
+            for (const wd of windows) {
+                if (!wd || typeof wd.id !== 'string') {
+                    continue
+                }
+                const win = known.get(wd.id)
+                const mineLive = win && this.hostsWindow(win) && !this.pendingHandover.has(wd.id)
+                if (mineLive) {
+                    continue
+                }
+                if (win) {
+                    if (win.hostWindowId !== wd.hostWindowId) {
+                        win.hostWindowId = wd.hostWindowId
+                        changed = true
+                    }
+                    if ((win.remoteTitle ?? '') !== (wd.title ?? '')) {
+                        win.remoteTitle = wd.title ?? ''
+                        changed = true
+                    }
+                    const name = wd.name ?? null
+                    if ((win.name ?? null) !== (name ?? null)) {
+                        win.name = name
+                        changed = true
+                    }
+                } else {
+                    session.windows.push({
+                        id: wd.id,
+                        name: wd.name ?? null,
+                        tab: null,
+                        hostWindowId: wd.hostWindowId,
+                        remoteTitle: wd.title ?? null,
+                        session,
+                    })
+                    changed = true
+                }
+            }
+            // Order by the sender's sequence; windows it does not know keep
+            // their relative positions (stable sort).
+            const order = new Map(windows.map((w: any, i: number) => [w.id as string, i]))
+            const before = session.windows.map(w => w.id).join('|')
+            session.windows.sort((a, b) => {
+                const ai = order.get(a.id)
+                const bi = order.get(b.id)
+                if (ai !== undefined && bi !== undefined) {
+                    return ai - bi
+                }
+                if (ai !== undefined) {
+                    return -1
+                }
+                if (bi !== undefined) {
+                    return 1
+                }
+                return 0
+            })
+            if (session.windows.map(w => w.id).join('|') !== before) {
+                changed = true
+            }
+            // Spectators adopt the sender's current-window pointer; a host
+            // with its own windows in the session tracks it locally.
+            if (!session.windows.some(w => this.hostsWindow(w)) &&
+                typeof sd.currentWindowIndex === 'number' &&
+                sd.currentWindowIndex !== session.currentWindowIndex) {
+                session.currentWindowIndex = sd.currentWindowIndex
+                changed = true
+            }
+        }
+        if (changed) {
+            this.changed$.next()
+        }
+    }
+
+    private snapshotDto (): MuxSessionDTO[] {
+        return this.sessions.map(s => ({
+            id: s.id,
+            name: s.name,
+            createdAt: s.createdAt,
+            currentWindowIndex: s.currentWindowIndex,
+            windows: s.windows.map(w => ({
+                id: w.id,
+                name: w.name,
+                hostWindowId: w.hostWindowId,
+                title: this.windowTitle(w) || null,
+            })),
+        }))
+    }
+
+    private markSnapshotDirty (): void {
+        this.snapshotDirty = true
+        if (this.snapshotTimer !== null) {
+            return
+        }
+        this.snapshotTimer = setTimeout(() => {
+            this.snapshotTimer = null
+            if (!this.snapshotDirty) {
+                return
+            }
+            this.snapshotDirty = false
+            this.sync.send({ t: 'snapshot', host: this.sync.hostWindowId, sessions: this.snapshotDto() })
+        }, 2_000)
+    }
+
+    /**
+     * Close confirmation for mux windows in non-main OS windows: closing the
+     * OS window (or its tabs) would terminate the hosted shells - one mux
+     * dialog replaces the per-pane native prompts for the whole window.
+     */
+    private installCloseConfirm (tab: SplitTabComponent): void {
+        const target = tab as any
+        const original = target.canClose?.bind(tab)
+        target.canClose = async (): Promise<boolean> => {
+            if (!this.windowByTab.has(tab)) {
+                return original ? original() : true
+            }
+            const panes = tab.getAllTabs()
+            const result = await this.platform.showMessageBox({
+                type: 'warning',
+                message: this.i18n.t('mux.mw.closeConfirm', { n: panes.length }),
+                buttons: [this.i18n.t('mux.mw.closeKill'), this.i18n.t('mux.paneModal.cancel')],
+                defaultId: 1,
+                cancelId: 1,
+            })
+            return result.response === 0
+        }
+    }
+
+    /**
+     * A mux operation emptied the tab bar (pulled the last window out,
+     * closed the last one) - show the mux empty page instead of a dead
+     * blank area. The host's welcome component is not exported from
+     * tabby-core, and this page offers mux actions anyway. Singleton: a
+     * second call while one is listed does nothing.
+     */
+    private openWelcomeIfEmpty (): void {
+        try {
+            if (this.app.tabs.length ||
+                this.app.tabs.some(t => t instanceof MuxEmptyTabComponent)) {
+                return
+            }
+            this.app.openNewTabRaw({ type: MuxEmptyTabComponent })
+        } catch {
+            // empty-page fallback is cosmetic
+        }
+    }
+
+    /** A window came back to this host - close the mux empty page if shown. */
+    private closeEmptyPageIfAny (): void {
+        try {
+            const empty = this.app.tabs.find(t => t instanceof MuxEmptyTabComponent)
+            if (empty && this.app.tabs.length > 1) {
+                empty.destroy()
+            }
+        } catch {
+            // cosmetic
+        }
     }
 
     private tryAdopt (tab: BaseTabComponent): void {
@@ -1216,6 +1822,10 @@ export class MuxService {
         this.titleSubs.delete(tab)
 
         const session = win.session
+        // releaseLocalTab un-registers BEFORE destroying, so reaching here
+        // means the window really ended (closed/killed) - tell the mesh so
+        // stub holders prune it too.
+        this.sync.send({ t: 'win-gone', host: this.sync.hostWindowId, windowId: win.id })
         session.windows = session.windows.filter(w => w !== win)
         if (!session.windows.length) {
             // tmux kills a session when its last window closes; when the
@@ -1236,6 +1846,7 @@ export class MuxService {
                 session.lastWindowIndex = -1
             }
         }
+        this.openWelcomeIfEmpty()
         this.changed$.next()
     }
 

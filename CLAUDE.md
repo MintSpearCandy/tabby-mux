@@ -106,18 +106,29 @@ node scripts/cdpEval.js "window.tabbyMux.sessions.length"
 
 ## 一期未做（Roadmap）
 
-prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；39 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`；`mux.new-session-from-template` 为模板新建命令，打开可搜索选择器）。**多窗口拉出/合并：可行性已验证（见下节），实现待排期。**
+prefix 前缀键、detach/持久化、tmux 布局模式、自研布局引擎。热键默认全空（用户决策 2026-10-25：候选默认与 tabby-terminal 内置冲突且内置恒胜，故不设默认）；40 个命令全部可在 设置→热键 搜 "mux" 找到（过滤匹配 name+id，id 均为 `mux.*`）。**多窗口拉出/合并已实现（见下节）。**
 
-## 多窗口拉出（可行性验证 2026-10-25，CDP 双窗口实测）
+## 多窗口拉出/合并（2026-10-25 实现，CDP 双窗口 E2E 全绿）
 
-目标：把 session 的 window 独立拉出成新 OS 窗口（或合并进已有拉出窗口），同一 session 同一套序号，热键跨窗口切换到前台。**结论：架构可行**，全部关键链路实测通过。
+session 的 window 可拉出成独立 OS 窗口、合并进已有窗口、拉回主窗；同一 session 全局一套窗口序号，热键（select-window-N / next / previous）跨窗口切前台。用户决策：拉出窗口关闭需确认（每窗口一次 mux 弹窗）；本窗口无窗口时回落到插件空态页；拉出窗口内 mux 状态栏照常显示（含窗口条）。
 
-- **每 OS 窗口 = 独立 renderer**（`app/lib/window.ts`：`loadFile(index.html)` 全新 Angular bootstrap），插件每窗口各一份实例（B 窗口 `window.tabbyMux` 存在）。新窗口入口：`require('electron').ipcRenderer.send('app:new-window')`（= `HostAppService.newWindow()`；`@electron/remote` 不转发 ipcRenderer，直接 require('electron')）。**新窗口不自动恢复 tabs**（实测空 tab 列表）。窗口 id：`remote.getCurrentWindow().id`。
-- **PTY 常驻主进程**（`app/lib/pty.ts` PTYManager）：uuid 键控 map，**仅子进程退出时删除**；session 销毁与否无关。IPC 面：`pty:spawn/exists/get-pid/resize/write/kill/ack-data`。**`pty:<id>:data` 经 `app.broadcast` 发给所有窗口** → 同一 PTY 可被多窗口同时附着 = 真 tmux attach 镜像语义（实测双向回显）。
-- **跨窗口附着 = recovery token**：A 侧 `pane.getRecoveryToken({includeState:true})` → `profile.options.restoreFromPTYID` + `savedState`（xterm 序列化状态，随 token 跨窗口迁移，实测含旧屏内容）；B 侧 `injector.get(TabRecoveryService).recoverTab(token)` + `tabsService.create` + `addTabRaw` → **同一 shell**（实测 ptyId 一致）。token 跨窗口传递：localStorage 共享（同 origin file://，实测可读）。
-- **销毁配方（拉出的成败关键）**：`BaseSession.destroy()` 会 `gracefullyKillProcess()` 杀 shell（tabby-terminal session.ts:114）。但 `BaseTerminalTabComponent.destroy()` 有 `if (this.session?.open)` 门（baseTerminalTab.component.ts:658）→ **A 侧先 `pane.session.open = false` 再 `tab.destroy()`，共享 shell 不死**（实测 B 侧继续回显存活）。副作用：`destroyed$` 不发射 → local session 的 pty IPC 监听器滞留 A（每 pane 3 个；可补刀 `(session as any).pty.unsubscribeAll()`）；mux 注册表经 destroyed$ 链正常自清。镜像双方任一**正常** destroy 都会杀共享 shell——所有涉及共享 PTY 的销毁必须走此配方。
-- **跨窗口通信三通道（全实测可用）**：localStorage 共享（拉数据）；`BroadcastChannel`（推送，file:// 同 origin 生效）；`remote.BrowserWindow.getAllWindows()/fromId(id).webContents.send('event',…)`（按窗口 id 定向）+ `fromId(id).focus()`（跨窗口聚焦，实测 A 命令 B 到前台）。协议建议：BroadcastChannel 做主通道，窗口 id 做路由。
-- **遗留设计点**：B 窗口直接关闭会杀其独占的 shell（正常 destroy 链）——关闭前需"拉回主窗口或确认"；两窗口互写同一 `localStorage.tabsRecovery`（快照互覆盖，与既有"后台会话不进快照"语义一致）；测试脚本 `scripts/cdpEvalW.js`（--win 选 target + 每次 evaluate 前 F13 戳 zone，多窗口实验必备）。
+**宿主机制（可行性验证过的平台事实）**：
+- 每 OS 窗口 = 独立 renderer（`loadFile(index.html)` 全新 bootstrap），插件每窗口一份实例。新窗口：`HostAppService.newWindow()`（tabby-core 基类抽象方法）→ `app:new-window` IPC；`@electron/remote` 不转发 ipcRenderer（要 IPC 就直接 require('electron')）。新窗口**不自动恢复 tabs**。窗口 id：`BOOTSTRAP_DATA.windowID`（tabby-core 注入令牌，typings 里是 string 类型要双 cast）；`bootstrapData.isMainWindow` 随 `host:became-main-window` 活更新。
+- **PTY 常驻主进程**（`app/lib/pty.ts`）：uuid map，仅子进程退出才删；`pty:<id>:data` 经 `app.broadcast` 广播所有窗口 → 同 PTY 多窗口附着 = tmux attach 镜像。
+- **跨窗口附着 = recovery token**：`tab.getRecoveryToken({includeState:true})`（SplitTab 级 = root.serialize，子 token 带 `restoreFromPTYID` + `savedState` 屏幕状态）→ 目标窗口 `TabRecoveryService.recoverTab(token)` + `tabsService.create(params as any)`（typings 泛型约束 BaseTabComponent 需 cast）+ `addTabRaw` → 同一 shell（ptyId 一致实测）。
+- **销毁配方**：`BaseSession.destroy()` → `gracefullyKillProcess()` 杀 shell；但 `BaseTerminalTabComponent.destroy():658` 有 `if (this.session?.open)` 门 → 释放方先 `session.open = false`（每 pane）+ `(session as any).pty?.unsubscribeAll?.()` 清滞留 IPC 监听（destroyed$ 不发射，local session 的清理订阅不会跑）→ `app.removeTab` 软撤 → `tab.destroy()`。**共享 PTY 期间任何一方的正常 destroy 都会杀 shell**。
+- **窗口关闭链**：主进程 close → preventDefault → `host:window-close-request` → appRoot → `app.closeWindow()` → `closeAllTabs()` **逐 tab `canClose()`** → 全过才 `hostWindow.close()`。mux 在非主窗口给托管 SplitTab 打 `canClose` 补丁（确认弹窗替代原生逐 pane 询问；返回 false 即阻断整窗关闭）。
+- `WelcomeTabComponent` **不在 tabby-core 运行时导出表里**（index.ts 只 import 进 NgModule）也没有 recovery provider → 插件拿不到，空态页是插件自有组件（emptyTab.component.ts）。
+- 通信通道：`BroadcastChannel('tabby-mux')`（file:// 同 origin 推送）+ **共享 localStorage**（`tabby-mux:pull-stash` 中转——新窗口 boot 时收不到频道消息，移交必须走 stash）。跨窗聚焦 = 目标窗口自己 `HostWindowService.bringToFront()`（主进程 window-bring-to-front，含最小化恢复）。
+
+**实现结构**：`src/sync.ts`（MuxSyncService：事件收发、5s 心跳/16s TTL 判死、stash 读写）+ mux.service 多宿主区块。协议事件：hello（对端回 snapshot）/ alive / snapshot（changed$ 打脏 2s 懒广播，本地活动 tab 恒胜、pendingHandover 期间例外）/ win-hosted（移交确认，源方随即 kill-free 释放）/ win-gone（窗口真死，stub 持有者修剪）/ focus-win / kill-win / check-stash（叫醒活着的认领者）。
+- **拉出流程**：源方捕获 token → stash（claim=hostId 或 'new'）→ `hostApp.newWindow()`（若新窗）→ 目标 boot/被叫醒后 `claimStashEntries` 认领（'new' 仅 `!isMainWindow && bootTime > e.ts` 的窗口可领；stash TTL 120s 兜底）→ recoverTab + `registerWindow(session, split, entry.windowId)`（**fixedId 命中已有 stub 时原位替换**——快照先到的 stub 与恢复实体合并，否则重复条目）→ `activatePanes`（恢复的 pane 同样焦点门控）→ win-hosted → 源方 `releaseLocalTab`。60s 无确认 = 撤销移交（源窗口保留）。
+- **注册表复制**：MuxWindow `{tab: SplitTab|null, hostWindowId, remoteTitle}`；快照合并规则 = 本地活动 tab 恒胜、其余采信发送方（含窗口顺序按发送方序列重排，稳定排序）、旁观者（本 host 无该会话窗口）才采信 currentWindowIndex；远程 stub 的增删只走显式 ops（win-hosted/win-gone/心跳判死）+ `pruneRemoteHost`（会话全灭时复刻 pruneWindow 的接管逻辑）。
+- **空态页**（MuxEmptyTabComponent）：mux 操作清空 tab 栏（拉走最后一个/关闭）或 attach 到无本地窗口的会话时打开（单例），本地窗口回归（registerWindow/attachSession）自动收起。非 SplitTab 不被领养；foreignTabsToTail 把它当外来 tab 处理。
+- 已知边界：关闭确认按窗口粒度（多窗口各弹一次，与原生逐 pane 粒度一致）；模板捕获只含本地窗口（远程布局树在别的 renderer）；双认领竞态最多镜像一次（无数据损失）；host 崩溃的窗口无重附着 token（PTY 泄漏至 shell 自然退出）；会话顺序各 host 可不同（switchSession 循环序纯观感）；两窗口互写 `localStorage.tabsRecovery`（宿主固有）。
+- 测试脚本 `scripts/cdpEvalW.js`（`--win <targetId前缀|序号>` 选窗口 + 每次求值前 F13 戳 zone）。原生 showMessageBox 测试不能靠 SendKeys（用户正在用机器时焦点不可控）——WM_CLOSE 关闭 Tabby 进程的小尺寸候选窗口（366x162）即等价取消，promise 落 false。
+
+**本轮工程坑**：组件 import MuxService 且被 mux.service 反向 import → 装饰器元数据在模块求值期触发循环 TDZ（"Cannot access before initialization"）——组件构造器参数禁止 MuxService 类型，Injector 运行时 get（同 commands.ts 规则，已写入空态页注释）；smokeLoad 的 strictProxy stub 表要随新 import 增补（BaseTabComponent）；BaseTabComponent.title 在 typings 里是属性，子类 getter 覆盖 TS2611（与 SettingsTabProvider 同款）。
 
 ## 热键（2026-10-25 实测沉淀）
 

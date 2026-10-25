@@ -19,13 +19,24 @@ export interface MuxSession {
 /**
  * tmux window -> MuxWindow: one top-level Tabby tab (SplitTabComponent).
  * The tab may contain a single pane or a whole split layout tree.
+ *
+ * Multi-host: a window's live tab lives in exactly ONE OS window (renderer).
+ * Hosts that do not own it keep a stub entry (`tab: null`, `hostWindowId`
+ * pointing at the owning renderer); the display title of a stub is the
+ * last broadcast `remoteTitle`.
  */
 export interface MuxWindow {
+    /** Globally unique: `w<hostWindowId>.<seq>` - ids must never collide across hosts. */
     id: string
     /** Custom name; null = derive from the tab's dynamic title. */
     name: string | null
-    tab: SplitTabComponent
+    /** Live tab; null while another OS window hosts this window. */
+    tab: SplitTabComponent | null
     session: MuxSession
+    /** OS window id of the renderer hosting the live tab. */
+    hostWindowId: number
+    /** Display title cache for remotely-hosted windows (broadcast by the host). */
+    remoteTitle: string | null
 }
 
 /**
@@ -152,4 +163,44 @@ export function defaultMuxSettings (): MuxSettings {
         isolatedSessions: true,
         foreignTabsToTail: false,
     }
+}
+
+// ======================================================================
+// Multi-host (window pull-out) types
+// ======================================================================
+
+/** Window entry as broadcast between OS windows. */
+export interface MuxWindowDTO {
+    id: string
+    name: string | null
+    hostWindowId: number
+    title: string | null
+}
+
+/** Session snapshot as broadcast between OS windows. */
+export interface MuxSessionDTO {
+    id: string
+    name: string
+    createdAt: number
+    currentWindowIndex: number
+    windows: MuxWindowDTO[]
+}
+
+/**
+ * A pending window handover, stashed in the SHARED localStorage so a target
+ * renderer that is still booting (a brand-new OS window) can pick it up;
+ * alive targets get nudged over the BroadcastChannel. `claim`:
+ *  - number: only that host window id may take it (merge into existing host)
+ *  - 'new': claimed by the next host that boots AFTER the entry was created
+ */
+export interface PullStashEntry {
+    id: string
+    claim: number | 'new'
+    sessionId: string
+    sessionName: string
+    windowId: string
+    windowName: string | null
+    /** SplitTab recovery token (children carry restoreFromPTYID + savedState). */
+    token: any
+    ts: number
 }

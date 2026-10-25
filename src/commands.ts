@@ -84,6 +84,12 @@ export const MUX_COMMANDS: MuxCommandSpec[] = [
         run: mux => mux.killWindow(mux.activeWindow),
     },
     {
+        id: 'mux.move-window',
+        labelKey: 'mux.moveWindow',
+        needsWindow: true,
+        run: mux => mux.promptMoveWindow(mux.activeWindow),
+    },
+    {
         id: 'mux.next-window',
         labelKey: 'mux.nextWindow',
         needsSession: true,

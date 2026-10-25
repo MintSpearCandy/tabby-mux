@@ -43,6 +43,7 @@ const tabbyCoreExports = {
     Command: stubClass('Command'),
     PromptModalComponent: stubClass('PromptModalComponent'),
     SplitTabComponent: stubClass('SplitTabComponent'),
+    BaseTabComponent: stubClass('BaseTabComponent'),
     // services referenced through the injector (constructor bodies only)
     AppService: stubClass('AppService'),
     ConfigService: stubClass('ConfigService'),

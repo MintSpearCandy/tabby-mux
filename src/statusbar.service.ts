@@ -65,6 +65,28 @@ const STYLE = `
     color: var(--theme-primary-fg, #fff);
 }
 #tabby-mux-statusbar .mux-session-chip.detached { color: var(--theme-fg-more, #999); }
+#tabby-mux-statusbar .mux-windows {
+    display: flex;
+    gap: 1px;
+    min-width: 0;
+    overflow: hidden;
+    flex: 0 1 auto;
+    padding-left: 6px;
+}
+#tabby-mux-statusbar .mux-win-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+#tabby-mux-statusbar .mux-win-chip b { font-weight: 700; }
+#tabby-mux-statusbar .mux-win-chip i { font-size: 9px; opacity: .8; }
+#tabby-mux-statusbar .mux-win-chip:hover { background: var(--theme-bg-less, rgba(128,128,128,.25)); }
+#tabby-mux-statusbar .mux-win-chip.current { background: var(--theme-bg-less-2, rgba(128,128,128,.4)); }
+#tabby-mux-statusbar .mux-win-chip.remote { color: var(--theme-fg-more, #999); }
 #tabby-mux-statusbar .mux-spacer { flex: 1 1 auto; min-width: 8px; }
 #tabby-mux-statusbar .mux-info {
     display: inline-flex;
@@ -280,6 +302,25 @@ export class MuxStatusbarService {
         })
         parts.push(`<span class="mux-sessions">${chips.join('')}</span>`)
 
+        // ---- window strip: one chip per window of the shown session. The
+        // numbering spans OS windows - windows pulled into another host show
+        // dimmed with a link-out marker; clicking one brings its host to the
+        // front (same path as the select-window hotkeys).
+        const winChips: string[] = []
+        session.windows.forEach((w: any, i: number) => {
+            const current = i === session.currentWindowIndex
+            const remote = !this.mux.hostsWindow(w)
+            const cls = ['mux-win-chip', current ? 'current' : '', remote ? 'remote' : ''].filter(Boolean).join(' ')
+            const title = escapeHtml(this.mux.windowTitle(w) || `#${i}`) +
+                (remote ? ` · ${escapeHtml(this.i18n.t('mux.mw.remoteHint', { id: w.hostWindowId }))}` : '')
+            winChips.push(
+                `<span class="${cls}" data-window-id="${w.id}" title="${title}">${i}` +
+                `${current ? '<b>*</b>' : ''}${remote ? '<i class="fas fa-external-link-alt"></i>' : ''}</span>`)
+        })
+        if (winChips.length) {
+            parts.push(`<span class="mux-windows">${winChips.join('')}</span>`)
+        }
+
         // ---- right side: pane info + system resources ----
         const right: string[] = []
         const activeWindow = this.mux.activeWindow
@@ -339,6 +380,14 @@ export class MuxStatusbarService {
             if (session) {
                 this.mux.switchToSession(session)
             }
+            return
+        }
+        const winEl = target.closest('.mux-win-chip') as HTMLElement | null
+        if (winEl) {
+            const found = this.mux.findWindowById(winEl.dataset['windowId'] ?? '')
+            if (found) {
+                this.mux.selectWindow(found.win)
+            }
         }
     }
 
@@ -354,6 +403,15 @@ export class MuxStatusbarService {
             if (session) {
                 ev.preventDefault()
                 this.mux.sessionContextMenu(session, ev)
+            }
+            return
+        }
+        const winEl = target.closest('.mux-win-chip') as HTMLElement | null
+        if (winEl) {
+            const found = this.mux.findWindowById(winEl.dataset['windowId'] ?? '')
+            if (found) {
+                ev.preventDefault()
+                this.mux.windowContextMenu(found.win, ev)
             }
         }
     }
