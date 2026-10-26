@@ -1606,6 +1606,30 @@ export class MuxService {
             // the shells live on in the other host either way
         }
         this.changed$.next()
+        // A secondary window that just gave away its last mux window is an
+        // empty shell - keep it around and it still participates in the
+        // registry sync and holds a stale attachment (unstable session
+        // behavior). Release it; the main window never closes itself.
+        this.closeSelfIfEmptySecondary()
+    }
+
+    /**
+     * Close this OS window when, as a secondary host, it no longer holds
+     * ANY mux window (and no foreign tab the user might want). Main window
+     * is the management anchor and stays.
+     */
+    private closeSelfIfEmptySecondary (): void {
+        try {
+            if (this.sync.isMainWindow || this.app.tabs.length) {
+                return
+            }
+            if (this.sessions.some(s => s.windows.some(w => this.hostsWindow(w)))) {
+                return
+            }
+            this.hostWindow.close()
+        } catch {
+            // self-closing is best-effort
+        }
     }
 
     /** Removes every window of a host that stopped broadcasting (crash/close). */
@@ -2000,6 +2024,9 @@ export class MuxService {
             }
         }
         this.changed$.next()
+        // Symmetric with the move-out path: a secondary emptied by closing
+        // or killing its last window releases itself too (not only moves).
+        this.closeSelfIfEmptySecondary()
     }
 
     private trackActiveWindow (tab: BaseTabComponent | null): void {
