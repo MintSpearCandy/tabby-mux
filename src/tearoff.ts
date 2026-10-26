@@ -50,6 +50,9 @@ export class MuxTearoffService {
     private card: HTMLElement | null = null
     private cardW = 0
     private dwellTimer: any = null
+    /** Last mousedown - the true grab point for the anchor. */
+    private grabPoint: { x: number, y: number, ts: number } | null = null
+    private anchorReady = false
     /** The tear-off target: a real, empty host window following the cursor. */
     private target: any = null
     private targetHostId: number | null = null
@@ -75,6 +78,9 @@ export class MuxTearoffService {
         document.head.appendChild(style)
 
         document.addEventListener('mousemove', ev => this.onMove(ev), { capture: true, passive: true })
+        document.addEventListener('mousedown', ev => {
+            this.grabPoint = { x: ev.screenX, y: ev.screenY, ts: Date.now() }
+        }, { capture: true, passive: true })
         this.app.tabDragActive$.subscribe(tab => this.onDragState(tab))
         this.handBackFocusIfTarget()
     }
@@ -92,6 +98,15 @@ export class MuxTearoffService {
                 this.lastScreen = null
                 this.lastClient = null
                 this.tabBarRect = document.querySelector('.tab-bar')?.getBoundingClientRect() ?? null
+                // The anchor is WHERE THE TAB WAS GRABBED: cdkDragStarted
+                // fires a few hundred ms after mousedown, so the most recent
+                // mousedown is the grab point. Without one (synthetic tests)
+                // the first cursor sample after arming stands in.
+                this.anchorReady = false
+                if (this.grabPoint && Date.now() - this.grabPoint.ts < 1500) {
+                    this.rememberGrabOffset(this.grabPoint)
+                    this.anchorReady = true
+                }
                 this.clearCard()
                 this.clearDwell()
                 return
@@ -112,6 +127,10 @@ export class MuxTearoffService {
         }
         this.lastScreen = { x: ev.screenX, y: ev.screenY }
         this.lastClient = { x: ev.clientX, y: ev.clientY }
+        if (!this.anchorReady) {
+            this.rememberGrabOffset(this.lastScreen)
+            this.anchorReady = true
+        }
 
         if (this.insideTabBar(ev.clientX, ev.clientY)) {
             // Back in the strip: plain reorder mode; a materialized target
@@ -240,7 +259,6 @@ export class MuxTearoffService {
         try {
             const remote: any = (require as any)('@electron/remote')
             const before = new Set(remote.BrowserWindow.getAllWindows().map((w: any) => w.id))
-            this.rememberGrabOffset(this.lastScreen)
             const b = this.phantomBoundsAt(this.lastScreen)
             this.mux.openNewHostWindow()
             // The handle exists the moment the BrowserWindow is constructed
@@ -347,14 +365,16 @@ export class MuxTearoffService {
     }
 
     /**
-     * The anchor the cursor "holds" the window by: the cursor's offset
-     * within the SOURCE window at card-show time, clamped so the target
-     * keeps a sane amount of window around the cursor.
+     * The anchor the cursor "holds" the window by: where the tab was
+     * GRABBED, expressed as the mousedown's offset within the source
+     * window. The target window keeps that same point under the cursor,
+     * so the grabbed tab visually stays pinned to the mouse - the same
+     * relative position it had in the source window's tab bar.
      */
     private rememberGrabOffset (pt: { x: number, y: number }): void {
         this.grabOffset = {
-            x: clamp(pt.x - window.screenX, 90, Math.max(90, window.outerWidth - 90)),
-            y: clamp(pt.y - window.screenY, 14, 90),
+            x: clamp(pt.x - window.screenX, 40, Math.max(40, window.outerWidth - 40)),
+            y: clamp(pt.y - window.screenY, 14, 80),
         }
     }
 
