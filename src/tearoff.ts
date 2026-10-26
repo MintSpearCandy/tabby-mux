@@ -50,6 +50,9 @@ export class MuxTearoffService {
     private card: HTMLElement | null = null
     private cardW = 0
     private dwellTimer: any = null
+    /** Back-in-the-bar hysteresis: the target window is released only after the anchor stays in the strip this long. */
+    private returnTimer: any = null
+    private static readonly RETURN_MS = 300
     /** Last mousedown - the true grab point for the anchor. */
     private grabPoint: { x: number, y: number, ts: number } | null = null
     private anchorReady = false
@@ -109,6 +112,7 @@ export class MuxTearoffService {
                 }
                 this.clearCard()
                 this.clearDwell()
+                this.clearReturnTimer()
                 return
             }
             this.armed = false
@@ -133,14 +137,28 @@ export class MuxTearoffService {
         }
 
         if (this.insideTabBar(ev.clientX, ev.clientY)) {
-            // Back in the strip: plain reorder mode; a materialized target
-            // merges back (closes).
+            // Back in the strip: tab form returns immediately (card away,
+            // CDK reorder preview visible again). The target window is
+            // released only after the anchor STAYS in the strip for a
+            // moment - leaving again before that keeps it alive and
+            // following, with no re-creation cost.
             this.clearCard()
             this.clearDwell()
-            this.destroyTarget()
+            if (this.target && this.returnTimer === null) {
+                this.returnTimer = setTimeout(() => {
+                    this.returnTimer = null
+                    if (this.armed && this.lastClient && this.insideTabBar(this.lastClient.x, this.lastClient.y)) {
+                        this.destroyTarget()
+                    }
+                }, MuxTearoffService.RETURN_MS)
+            }
             return
         }
 
+        if (this.returnTimer !== null) {
+            clearTimeout(this.returnTimer)
+            this.returnTimer = null
+        }
         this.ensureCard()
         this.positionCard(ev.clientX, ev.clientY)
         if (this.target) {
@@ -177,7 +195,8 @@ export class MuxTearoffService {
             return
         }
         const host = this.mux.dropTargetHostAt(pt.x, pt.y)
-        if (host !== null) {
+        if (host !== null && host !== this.targetHostId) {
+            // Over a genuinely different mux window: merge there.
             this.destroyTarget()
             void this.mux.moveWindowTo(win, host)
             return
@@ -245,6 +264,13 @@ export class MuxTearoffService {
         if (this.dwellTimer !== null) {
             clearTimeout(this.dwellTimer)
             this.dwellTimer = null
+        }
+    }
+
+    private clearReturnTimer (): void {
+        if (this.returnTimer !== null) {
+            clearTimeout(this.returnTimer)
+            this.returnTimer = null
         }
     }
 
@@ -324,6 +350,7 @@ export class MuxTearoffService {
             clearTimeout(this.followTimer)
             this.followTimer = null
         }
+        this.clearReturnTimer()
         this.forgetTarget(true)
     }
 
