@@ -198,6 +198,16 @@ export class MuxService {
         return this.sync.isMainWindow
     }
 
+    /** This renderer's OS window id (Tabby BrowserWindow id). */
+    get hostWindowId (): number {
+        return this.sync.hostWindowId
+    }
+
+    /** Opens one more Tabby OS window (the tear-off drag creates its target this way). */
+    openNewHostWindow (): void {
+        this.hostApp.newWindow()
+    }
+
     findWindowById (id: string): { session: MuxSession, win: MuxWindow } | null {
         for (const session of this.sessions) {
             const win = session.windows.find(w => w.id === id)
